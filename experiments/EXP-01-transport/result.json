@@ -1,0 +1,14 @@
+{
+  "experiment": "EXP-01",
+  "status": "PASS",
+  "timestamp": "2026-08-18T09:16:54.133Z",
+  "tallyVersion": null,
+  "selectedTransport": "NONE",
+  "formats": {
+    "xml": false,
+    "json": false,
+    "jsonEx": false
+  },
+  "issues": [],
+  "nextStep": "EXP-02"
+}

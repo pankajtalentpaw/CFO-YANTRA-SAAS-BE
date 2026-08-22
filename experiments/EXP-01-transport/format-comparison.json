@@ -1,0 +1,22 @@
+{
+  "xml": {
+    "supported": false,
+    "statusCode": null,
+    "responseTimeMs": 3008,
+    "responseSize": 0
+  },
+  "json": {
+    "supported": false,
+    "statusCode": null,
+    "responseTimeMs": 3003,
+    "responseSize": 0,
+    "errorCode": "ECONNABORTED"
+  },
+  "jsonEx": {
+    "supported": false,
+    "statusCode": null,
+    "responseTimeMs": 3010,
+    "responseSize": 0,
+    "errorCode": "ECONNABORTED"
+  }
+}

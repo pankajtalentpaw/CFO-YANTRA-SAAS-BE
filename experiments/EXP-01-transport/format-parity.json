@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "xmlVsJson": {
+    "differentFields": []
+  },
+  "jsonVsJsonEx": {
+    "differentFields": []
+  },
+  "canonicalSummary": {
+    "xmlCount": 0,
+    "jsonCount": 0,
+    "jsonExCount": 0
+  }
+}

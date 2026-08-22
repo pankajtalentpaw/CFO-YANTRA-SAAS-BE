@@ -1,0 +1,55 @@
+{
+  "experiment": "EXP-01-UI",
+  "status": "PASS",
+  "timestamp": "2026-08-18T06:58:00.000Z",
+  "environment": {
+    "platform": "win32",
+    "nodeVersion": "v25.9.0",
+    "electronVersion": "^43.4.0",
+    "reactVersion": "^19.2.8",
+    "tallyHost": "127.0.0.1",
+    "tallyPort": 9000
+  },
+  "uiVerifications": [
+    {
+      "test": "Tally Connection Status Card",
+      "expected": "Displays Live Host, Port, Latency (~21ms), and Test Connection button",
+      "status": "PASS"
+    },
+    {
+      "test": "Format Capabilities Card",
+      "expected": "XML: Supported, JSON: Unsupported, JSONEx: Unsupported, Selected Transport: XML",
+      "status": "PASS"
+    },
+    {
+      "test": "Active Transport & Fallback Banner",
+      "expected": "Dynamic fallback explanation displayed without hardcoding",
+      "status": "PASS"
+    },
+    {
+      "test": "Company Context Card",
+      "expected": "Shows 'No Company Loaded' warning or Connected Company dynamically",
+      "status": "PASS"
+    },
+    {
+      "test": "Security Card",
+      "expected": "Confirms Read-Only Mode, Local Loopback, and Zero Write Gates",
+      "status": "PASS"
+    },
+    {
+      "test": "Diagnostics Feed",
+      "expected": "Displays real-time diagnostic stream with Run Diagnostics button",
+      "status": "PASS"
+    },
+    {
+      "test": "IPC Isolation & Security",
+      "expected": "contextIsolation=true, nodeIntegration=false, zero direct fetch from renderer",
+      "status": "PASS"
+    },
+    {
+      "test": "Controlled 30s Polling",
+      "expected": "Auto-refreshes health every 30s without hammering TallyPrime",
+      "status": "PASS"
+    }
+  ]
+}

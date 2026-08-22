@@ -1,0 +1,7 @@
+{
+  "test": "1E_NON_DEFAULT_PORT",
+  "status": "PASS",
+  "configuredPort": 9000,
+  "supportsCustomPortOverride": true,
+  "verificationNote": "Config system dynamically reads TALLY_PORT from environment variable without code changes."
+}

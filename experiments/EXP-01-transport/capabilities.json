@@ -1,0 +1,13 @@
+{
+  "tallyReachable": false,
+  "tallyVersion": null,
+  "port": 9000,
+  "formats": {
+    "xml": false,
+    "json": false,
+    "jsonEx": false
+  },
+  "companies": [],
+  "selectedFormat": "NONE",
+  "error": "ECONNABORTED"
+}

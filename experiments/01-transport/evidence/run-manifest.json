@@ -1,0 +1,14 @@
+{
+  "experiment_id": "EXP-01-TRANSPORT",
+  "run_id": "run_1786967063038",
+  "timestamp": "2026-08-17T11:44:23.038Z",
+  "node_version": "v25.9.0",
+  "os": "win32 x64",
+  "tally_version": "TallyPrime",
+  "tally_mode": "Educational / Licensed Local",
+  "host": "127.0.0.1",
+  "port": 9000,
+  "company": "Pankaj Demo",
+  "connector_version": "1.0.0",
+  "parser_version": "fast-xml-parser 5.11.0"
+}

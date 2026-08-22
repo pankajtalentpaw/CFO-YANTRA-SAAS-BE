@@ -1,0 +1,8 @@
+{
+  "test": "1B_TALLY_STOPPED",
+  "status": "PASS",
+  "errorCode": "ECONNREFUSED",
+  "errorMessage": "connect ECONNREFUSED 127.0.0.1:9998",
+  "serverStatus": "UNREACHABLE",
+  "diagnosticHint": "Check if Tally is running and port configuration is correct."
+}

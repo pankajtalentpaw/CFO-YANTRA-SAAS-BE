@@ -1,0 +1,7 @@
+{
+  "test": "1C_WRONG_PORT",
+  "status": "PASS",
+  "errorCode": "ECONNREFUSED",
+  "errorMessage": "connect ECONNREFUSED 127.0.0.1:9005",
+  "serverStatus": "UNREACHABLE"
+}

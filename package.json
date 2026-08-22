@@ -1,0 +1,52 @@
+{
+  "name": "cfo-yantra-backend",
+  "version": "1.0.0",
+  "description": "CFO Yantra Tally Integration Engine & REST API",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch-path=./src src/server.js",
+    "test": "jest",
+    "probe": "node src/scripts/probe.js",
+    "tally:capabilities": "node src/scripts/capabilities.js",
+    "tally:xml": "node src/scripts/tallyXml.js",
+    "tally:json": "node src/scripts/tallyJson.js",
+    "tally:jsonex": "node src/scripts/tallyJsonEx.js",
+    "tally:compare": "node src/scripts/compare.js",
+    "experiment:01": "node src/scripts/experiment01.js",
+    "experiment:02": "node src/scripts/experiment02.js",
+    "experiment:03": "node src/scripts/experiment03.js",
+    "experiment:04": "node src/scripts/experiment04.js",
+    "experiment:05": "node src/scripts/experiment05.js",
+    "experiment:06": "node src/scripts/experiment06.js",
+    "experiment:07": "node src/scripts/experiment07.js",
+    "experiment:08": "node src/scripts/experiment08.js",
+    "experiment:09": "node src/scripts/experiment09.js",
+    "experiment:10": "node src/scripts/experiment10.js"
+  },
+  "keywords": [
+    "tally",
+    "cfo-yantra",
+    "integration",
+    "bridge",
+    "accounting"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.19.0",
+    "cors": "^2.8.5",
+    "decimal.js": "^10.6.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "fast-xml-parser": "^5.11.0",
+    "mongoose": "^9.9.3",
+    "pino": "^10.3.1",
+    "uuid": "^14.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2"
+  }
+}

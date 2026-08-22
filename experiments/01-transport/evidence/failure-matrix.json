@@ -1,0 +1,76 @@
+{
+  "test": "1G_DIAGNOSTICS_AND_FAILURE_MATRIX",
+  "status": "PASS",
+  "sample_healthy_diagnostic": {
+    "status": "healthy",
+    "tally": {
+      "reachable": true,
+      "host": "127.0.0.1",
+      "port": 9000,
+      "responseTimeMs": 4,
+      "errorCode": null
+    },
+    "company": {
+      "configured": true,
+      "name": "Pankaj Demo"
+    },
+    "capabilities": {
+      "xml": true,
+      "json": "unknown",
+      "odbc": "unknown"
+    },
+    "diagnosticHint": null
+  },
+  "sample_unreachable_diagnostic": {
+    "status": "unhealthy",
+    "tally": {
+      "reachable": false,
+      "host": "127.0.0.1",
+      "port": 9998,
+      "responseTimeMs": 2,
+      "errorCode": "ECONNREFUSED"
+    },
+    "company": {
+      "configured": true,
+      "name": "Pankaj Demo"
+    },
+    "capabilities": {
+      "xml": true,
+      "json": "unknown",
+      "odbc": "unknown"
+    },
+    "diagnosticHint": "Check if Tally is running and port configuration is correct."
+  },
+  "failure_matrix": [
+    {
+      "condition": "Tally Not Running",
+      "errorCode": "ECONNREFUSED",
+      "serverStatus": "UNREACHABLE",
+      "action": "Prompt user to launch TallyPrime"
+    },
+    {
+      "condition": "Wrong Port",
+      "errorCode": "ECONNREFUSED",
+      "serverStatus": "UNREACHABLE",
+      "action": "Verify TALLY_PORT in .env"
+    },
+    {
+      "condition": "No Company Loaded",
+      "errorCode": "EMPTY_COLLECTION",
+      "serverStatus": "RUNNING_BUT_IDLE_OR_BLOCKED",
+      "action": "Prompt user to open company in Tally"
+    },
+    {
+      "condition": "Modal Prompt Active",
+      "errorCode": "ECONNABORTED",
+      "serverStatus": "RUNNING_BUT_IDLE_OR_BLOCKED",
+      "action": "Dismiss Tally modal prompt"
+    },
+    {
+      "condition": "Invalid TDL Payload",
+      "errorCode": "TDL_ERROR",
+      "serverStatus": "RUNNING_BUT_IDLE_OR_BLOCKED",
+      "action": "Fix XML schema payload"
+    }
+  ]
+}
