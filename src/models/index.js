@@ -26,8 +26,12 @@ const DOMAIN_MODELS = {
 // Vouchers are transactions rather than masters: same envelope, but queried by
 // date, so they get their own model and date index.
 const Voucher = buildMirrorModel("Voucher", "Voucher", "vouchers");
-Voucher.schema.index({ companyId: 1, date: 1 });
-Voucher.schema.index({ companyId: 1, voucherNumber: 1 });
+// Index the fields the canonical voucher actually carries: `voucherDate` and
+// `sourceVoucherNumber`. The previous `date`/`voucherNumber` pair existed on no
+// voucher document, so the register's date-window read was unindexed as well as
+// unmatched.
+Voucher.schema.index({ companyId: 1, voucherDate: 1 });
+Voucher.schema.index({ companyId: 1, sourceVoucherNumber: 1 });
 
 module.exports = {
   Company,

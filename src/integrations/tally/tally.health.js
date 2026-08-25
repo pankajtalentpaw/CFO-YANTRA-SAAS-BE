@@ -93,6 +93,13 @@ async function probeTally(options = {}) {
         "Tally server responded to GET on port, but XML POST requests timed out. Ensure target company is open and all modal dialogs are closed.";
     }
 
+    let cachedCompanies = [];
+    try {
+      const { listCompanies } = require("../../services/companyScope.service");
+      const fallback = await listCompanies({ allowStale: true });
+      if (fallback && fallback.companies) cachedCompanies = fallback.companies;
+    } catch (_) {}
+
     return {
       success: false,
       statusCode: null,
@@ -103,6 +110,11 @@ async function probeTally(options = {}) {
       retryable: diagnostic.retryable,
       responseTimeMs,
       serverStatus: heartbeat.alive ? "RUNNING_BUT_BLOCKED" : "UNREACHABLE",
+      companyAvailable: cachedCompanies.length > 0,
+      companyCount: cachedCompanies.length,
+      companies: cachedCompanies,
+      companyNames: cachedCompanies.map((c) => c.name),
+      company: cachedCompanies[0] || null,
       tallyAvailability: breaker.snapshot()
     };
   }

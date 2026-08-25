@@ -4,7 +4,7 @@ const axios = require("axios");
 const breaker = require("../src/integrations/tally/tally.breaker");
 const { sendXml, checkHeartbeat } = require("../src/integrations/tally/tally.client");
 const { classifyError } = require("../src/services/diagnostics.service");
-const { classifyTransportFailure, INGESTION_ERROR_CODES } = require("../src/integrations/tally/sales/factSales.errors");
+const { classifyTransportFailure, ingestionError, INGESTION_ERROR_CODES } = require("../src/integrations/tally/sales/factSales.errors");
 const { FAILURE_CODES } = require("../src/constants");
 
 const PROBE_XML = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>CompanyCollection</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
@@ -166,5 +166,65 @@ describe("Paused Tally is reported as paused, not as a fresh timeout", () => {
   test("a real timeout is still a timeout", () => {
     const code = classifyTransportFailure({ errorMessage: "timeout of 10000ms exceeded" });
     expect(code).toBe(INGESTION_ERROR_CODES.TALLY_TIMEOUT);
+  });
+});
+
+describe("The pause names the fault it actually saw", () => {
+  test("a silent Tally points at both causes, including a second instance on the port", () => {
+    breaker.recordFailure(timeoutError());
+    expect(() => breaker.assertAvailable()).toThrow(/accepted the connection/i);
+    // A wedged Tally and a port already owned by another tally.exe are
+    // indistinguishable over HTTP, so the message must name both.
+    expect(() => breaker.assertAvailable()).toThrow(/dialog is open/i);
+    expect(() => breaker.assertAvailable()).toThrow(/second tally\.exe/i);
+  });
+
+  test("a refused connect never tells the user to hunt for a dialog", () => {
+    const refused = new Error("connect ECONNREFUSED 127.0.0.1:9000");
+    refused.code = "ECONNREFUSED";
+    breaker.recordFailure(refused);
+
+    expect(() => breaker.assertAvailable()).toThrow(/nothing is listening/i);
+    expect(() => breaker.assertAvailable()).not.toThrow(/dialog/i);
+    // The only fix for a refused connect is turning the server on.
+    expect(() => breaker.assertAvailable()).toThrow(/connectivity/i);
+  });
+
+  test("the breaker reports which fault opened it", () => {
+    const refused = new Error("connect ECONNREFUSED 127.0.0.1:9000");
+    refused.code = "ECONNREFUSED";
+    breaker.recordFailure(refused);
+
+    try {
+      breaker.assertAvailable();
+      throw new Error("expected the breaker to refuse");
+    } catch (error) {
+      expect(error.code).toBe("ETALLYUNAVAILABLE");
+      expect(error.lastFailureCode).toBe("ECONNREFUSED");
+    }
+  });
+});
+
+describe("Ingestion errors reach the UI with something to act on", () => {
+  test("a paused Tally carries a hint and an action, not just raw transport text", () => {
+    const error = ingestionError(INGESTION_ERROR_CODES.TALLY_PAUSED, {
+      source: "companyDiscovery",
+      stage: "extract",
+      message: "paused for 17s"
+    });
+
+    // The UI renders hint and raw message in separate slots. Without these it
+    // fell back to the message for both and printed the same sentence twice.
+    expect(error.diagnosticHint).toBeTruthy();
+    expect(error.diagnosticHint).not.toBe(error.message);
+    expect(error.userAction).toMatch(/tally\.exe/i);
+    expect(error.retryable).toBe(true);
+  });
+
+  test("an unmapped code still produces a well-formed error", () => {
+    const error = ingestionError("NOT_A_REAL_CODE", { message: "boom" });
+    expect(error.failureCode).toBe(INGESTION_ERROR_CODES.TALLY_INVALID_RESPONSE);
+    expect(error).toHaveProperty("diagnosticHint");
+    expect(error).toHaveProperty("userAction");
   });
 });

@@ -28,8 +28,8 @@ const FAILURE_METADATA = Object.freeze({
   [FAILURE_CODES.TALLY_PAUSED]: {
     retryable: true,
     severity: "HIGH",
-    diagnosticHint: "TallyPrime stopped responding, so requests are paused instead of piling up behind timeouts. The connection is retried automatically.",
-    userAction: "Bring TallyPrime to the front and close any open dialog. No restart is needed — the app reconnects on its own."
+    diagnosticHint: "TallyPrime accepted the connection but never answered, so requests are paused instead of piling up behind timeouts. The connection is retried automatically.",
+    userAction: "Close any dialog open in TallyPrime, then check Task Manager for a second tally.exe — if an older one is holding the connectivity port, the TallyPrime window you can see never bound it. No restart is needed once the port is free; the app reconnects on its own."
   },
   [FAILURE_CODES.TALLY_BUSY]: {
     retryable: true,

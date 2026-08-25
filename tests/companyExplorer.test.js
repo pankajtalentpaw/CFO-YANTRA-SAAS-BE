@@ -622,12 +622,14 @@ describe("Sales detail rows", () => {
 
   test("rows run newest first", async () => {
     const { rows } = await analyse();
-    expect(rows.map((r) => r.date)).toEqual(["2024-07-21", "2024-06-19"]);
+    expect(rows.map((r) => r.date)).toEqual(["2024-08-01", "2024-07-21", "2024-06-19"]);
   });
 
-  test("an invoice with no stock lines contributes no row but still counts in totals", async () => {
+  test("an invoice with no stock lines contributes an accounting row and counts in totals", async () => {
     const { rows, totals } = await analyse();
-    expect(rows.some((r) => r.voucherNumber === "AO/3")).toBe(false);
+    const ao3 = rows.find((r) => r.voucherNumber === "AO/3");
+    expect(ao3).toBeDefined();
+    expect(ao3.isAccountingInvoice).toBe(true);
     expect(totals.invoiceCount).toBe(3);
     expect(totals.vouchersWithoutItems).toBe(1);
   });
@@ -639,9 +641,10 @@ describe("Sales detail rows", () => {
       return Promise.resolve(transportOk(GEO_VOUCHERS_XML));
     });
     const { rows } = await analyse();
-    expect(rows[0]).toMatchObject({ country: null, state: null, city: null });
+    const ao2 = rows.find((r) => r.voucherNumber === "AO/2");
+    expect(ao2).toMatchObject({ country: null, state: null, city: null });
     // The sale itself is still reported.
-    expect(rows[0].amount).toBe("50000.00");
+    expect(ao2.amount).toBe("50000.00");
   });
 });
 

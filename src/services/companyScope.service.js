@@ -80,6 +80,17 @@ async function listCompanies({ fresh = false, allowStale = false, force = false 
   const load = async () => {
     const transportResult = await sendXmlRequest({ xml: buildCompanyListRequest(), force });
     if (!transportResult.success) {
+      if (allowStale) {
+        const hit = cache.get("__companies__");
+        if (hit && hit.value && hit.value.companies && hit.value.companies.length > 0) {
+          return { success: true, companies: hit.value.companies, source: "cache", stale: true };
+        }
+        const mirrored = await mirror.listCompanies();
+        if (mirrored && mirrored.length > 0) {
+          return { success: true, companies: mirrored, source: "mirror", stale: true };
+        }
+      }
+
       return {
         success: false,
         companies: [],

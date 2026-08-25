@@ -48,6 +48,37 @@ async function getCompany(req, res) {
     const transportRes = await sendXmlRequest({ xml });
     if (!transportRes.success) {
       const message = transportRes.errorMessage || transportRes.errorCode || "Tally request failed";
+
+      // Attempt fallback to cached or mirrored company list so an idle/busy Tally does not blank the UI
+      try {
+        const { listCompanies } = require("../services/companyScope.service");
+        const fallback = await listCompanies({ allowStale: true });
+        if (fallback && fallback.success && fallback.companies && fallback.companies.length > 0) {
+          const companies = fallback.companies
+            .map((info) => {
+              const base = info.raw && typeof info.raw === "object" ? { ...info.raw } : {};
+              base.NAME = info.name;
+              if (info.guid || info.companyId) base.GUID = info.guid || info.companyId;
+              if (info.masterId) base.MASTERID = info.masterId;
+              return normalizeCanonicalCompany(base, { sourceFormat: "XML" });
+            })
+            .filter(Boolean);
+
+          return res.json({
+            success: true,
+            companyCount: companies.length,
+            companies,
+            discovered: fallback.companies,
+            company: companies[0],
+            source: fallback.source || "cache",
+            stale: true,
+            warning: message
+          });
+        }
+      } catch (fallbackErr) {
+        // Fall through to standard 502 response
+      }
+
       const diagnostic = classifyError(new Error(message), {
         isInvalidCollection: isCollectionDescriptionError(message)
       });

@@ -3,6 +3,8 @@
  * Every error identifies company, source, stage and retryability.
  */
 
+const { FAILURE_CODES, FAILURE_METADATA } = require("../../../constants/failureCodes");
+
 const INGESTION_ERROR_CODES = Object.freeze({
   TALLY_CONNECTION_FAILED: "TALLY_CONNECTION_FAILED",
   TALLY_TIMEOUT: "TALLY_TIMEOUT",
@@ -43,6 +45,43 @@ const DATA_QUALITY_REASONS = Object.freeze({
 });
 
 /**
+ * Operator guidance per ingestion code.
+ *
+ * Most ingestion codes are the same fault the transport layer already has
+ * wording for, so they borrow it rather than drifting out of sync; the rest
+ * are pipeline-specific and carry their own. Without this an ingestion error
+ * reached the UI carrying only `message`, and the UI — which renders the hint
+ * and the raw message in separate slots — printed the same sentence twice and
+ * showed no action at all.
+ */
+const GUIDANCE = Object.freeze({
+  [INGESTION_ERROR_CODES.TALLY_CONNECTION_FAILED]: FAILURE_METADATA[FAILURE_CODES.TALLY_STOPPED],
+  [INGESTION_ERROR_CODES.TALLY_TIMEOUT]: FAILURE_METADATA[FAILURE_CODES.CONNECTION_TIMEOUT],
+  [INGESTION_ERROR_CODES.TALLY_PAUSED]: FAILURE_METADATA[FAILURE_CODES.TALLY_PAUSED],
+  [INGESTION_ERROR_CODES.TALLY_BUSY]: FAILURE_METADATA[FAILURE_CODES.TALLY_BUSY],
+  [INGESTION_ERROR_CODES.TALLY_INVALID_RESPONSE]: FAILURE_METADATA[FAILURE_CODES.UNEXPECTED_RESPONSE],
+  [INGESTION_ERROR_CODES.TALLY_XML_PARSE_ERROR]: FAILURE_METADATA[FAILURE_CODES.MALFORMED_XML],
+  [INGESTION_ERROR_CODES.TALLY_NO_COMPANY]: FAILURE_METADATA[FAILURE_CODES.NO_COMPANY],
+  [INGESTION_ERROR_CODES.TALLY_TDL_ERROR]: FAILURE_METADATA[FAILURE_CODES.TALLY_INVALID_COLLECTION],
+  [INGESTION_ERROR_CODES.TALLY_COMPANY_NOT_FOUND]: {
+    diagnosticHint: "TallyPrime is responding, but the requested company is not among the ones currently open.",
+    userAction: "Open the company in TallyPrime, then refresh."
+  },
+  [INGESTION_ERROR_CODES.TALLY_MASTER_EXTRACTION_FAILED]: {
+    diagnosticHint: "Master data (ledgers, stock items, groups) could not be extracted from TallyPrime.",
+    userAction: "Retry. If it persists, check the bridge logs for the failing collection."
+  },
+  [INGESTION_ERROR_CODES.TALLY_SALES_EXTRACTION_FAILED]: {
+    diagnosticHint: "Sales vouchers could not be extracted from TallyPrime.",
+    userAction: "Retry. Large voucher registers hold TallyPrime for a while because it processes one request at a time."
+  },
+  [INGESTION_ERROR_CODES.TALLY_UNSUPPORTED_FEATURE]: {
+    diagnosticHint: "The running TallyPrime release does not expose the field or report this request needs.",
+    userAction: "No action available in the app — the data is not present in this TallyPrime edition."
+  }
+});
+
+/**
  * Build a structured ingestion error.
  * @param {string} code One of INGESTION_ERROR_CODES
  * @param {object} details
@@ -53,6 +92,7 @@ const DATA_QUALITY_REASONS = Object.freeze({
  */
 function ingestionError(code, { companyId, source, stage, message } = {}) {
   const failureCode = INGESTION_ERROR_CODES[code] ? code : INGESTION_ERROR_CODES.TALLY_INVALID_RESPONSE;
+  const guidance = GUIDANCE[failureCode] || {};
   return {
     success: false,
     failureCode,
@@ -60,6 +100,9 @@ function ingestionError(code, { companyId, source, stage, message } = {}) {
     source: source || null,
     stage: stage || null,
     message: message || failureCode,
+    // Carried so the UI has something to say beyond the raw transport text.
+    diagnosticHint: guidance.diagnosticHint || null,
+    userAction: guidance.userAction || null,
     retryable: RETRYABLE.has(failureCode),
     timestamp: new Date().toISOString()
   };

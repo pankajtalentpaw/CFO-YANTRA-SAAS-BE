@@ -72,7 +72,7 @@ function modelForDomain(domain) {
  * @returns {{total,inserted,updated,unchanged,tombstoned}}
  */
 async function upsertRecords(model, companyId, records, runId) {
-  const stats = { total: records.length, inserted: 0, updated: 0, unchanged: 0, tombstoned: 0 };
+  const stats = { total: records.length, inserted: 0, updated: 0, unchanged: 0, tombstoned: 0, skipped: 0 };
 
   const existing = await model
     .find({ companyId }, { sourceObjectId: 1, contentHash: 1, isDeleted: 1 })
@@ -86,7 +86,10 @@ async function upsertRecords(model, companyId, records, runId) {
   for (const record of records) {
     const sourceObjectId = record && record.sourceObjectId;
     // A record the parser could not key cannot be mirrored deterministically.
-    if (!sourceObjectId) continue;
+    // Counted, not just dropped: an unkeyed record used to vanish here while
+    // `total` still reported it as read, so a domain that mirrored nothing at
+    // all still looked like a clean sync.
+    if (!sourceObjectId) { stats.skipped++; continue; }
     seen.add(sourceObjectId);
 
     const prior = known.get(sourceObjectId);
@@ -137,6 +140,12 @@ async function upsertRecords(model, companyId, records, runId) {
 
   if (ops.length > 0) {
     await model.bulkWrite(ops, { ordered: false });
+  }
+  if (stats.skipped > 0) {
+    logger.warn(
+      { companyId, objectType: model.modelName, skipped: stats.skipped, total: stats.total },
+      "Records had no sourceObjectId and were not mirrored"
+    );
   }
   return stats;
 }
@@ -214,13 +223,27 @@ async function readVouchers(companyId, { fromDate = null, toDate = null } = {}) 
   if (!isConnected()) return null;
   try {
     const query = { companyId, isDeleted: false };
-    // Canonical vouchers carry an ISO `date`; compare on the same compact form
-    // the request uses so a partial window is never served as complete.
-    if (fromDate) query.date = { ...(query.date || {}), $gte: toIsoDay(fromDate) };
-    if (toDate) query.date = { ...(query.date || {}), $lte: toIsoDay(toDate) };
+    // The canonical field is `voucherDate` (ISO yyyy-mm-dd), not `date` — a
+    // window built on `date` matched nothing, so every dated read fell through
+    // to live Tally. Compare on the same ISO form the request is converted to
+    // so a partial window is never served as complete.
+    if (fromDate) query.voucherDate = { ...(query.voucherDate || {}), $gte: toIsoDay(fromDate) };
+    if (toDate) query.voucherDate = { ...(query.voucherDate || {}), $lte: toIsoDay(toDate) };
 
     const docs = await Voucher.find(query).lean();
-    if (docs.length === 0) return null;
+    if (docs.length === 0) {
+      const totalCompanyVouchers = await Voucher.countDocuments({ companyId, isDeleted: false });
+      if (totalCompanyVouchers > 0) {
+        return {
+          available: true,
+          records: [],
+          fetchedAt: new Date().toISOString(),
+          source: "mirror",
+          syncedAt: new Date().toISOString()
+        };
+      }
+      return null;
+    }
 
     const syncedAt = docs.reduce(
       (max, d) => (d.syncedAt && d.syncedAt > max ? d.syncedAt : max),
@@ -273,6 +296,17 @@ async function countsForCompany(companyId) {
   return counts;
 }
 
+async function listCompanies() {
+  if (!isConnected()) return [];
+  try {
+    const docs = await Company.find({ isDeleted: false }).lean();
+    return docs.map(stripCompanyEnvelope);
+  } catch (error) {
+    logger.warn({ error: error.message }, "Mirror listCompanies lookup failed");
+    return [];
+  }
+}
+
 module.exports = {
   stripEnvelope,
   stripCompanyEnvelope,
@@ -282,6 +316,7 @@ module.exports = {
   upsertVouchers,
   upsertCompanies,
   readCompany,
+  listCompanies,
   readDomain,
   readVouchers,
   countsForCompany,

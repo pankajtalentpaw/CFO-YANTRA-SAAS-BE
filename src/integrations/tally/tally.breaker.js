@@ -23,24 +23,62 @@
  * through, and one success resets everything — no restart, no manual step.
  */
 
+const env = require("../../config/env");
 const { logger } = require("../../utils/logger");
 
 /** Cooldown ladder. A Tally that stays wedged is retried less and less often. */
 const COOLDOWN_LADDER_MS = [5_000, 10_000, 20_000, 30_000];
 
+/** Failures where the TCP connect itself never succeeded. */
+const REFUSED_CODES = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND"]);
+
+/**
+ * Word the pause by what actually failed.
+ *
+ * A refused connect and a silent one are different faults with different
+ * fixes. Telling someone to close a dialog when nothing is even listening
+ * sends them hunting for a dialog that does not exist.
+ *
+ * The silent case has two causes that are indistinguishable over HTTP:
+ * TallyPrime is blocked on a modal, or a second TallyPrime process already
+ * owns the port and the visible one never bound it. Tally reports nothing at
+ * all when that bind fails — it looks connected, and its Tally.NET "connected
+ * for online access" line stays green because that is a different channel
+ * entirely — so the port has to be named as a suspect or nobody checks it.
+ */
+function buildUnavailableMessage(retryInMs, lastFailureCode) {
+  const seconds = Math.ceil(retryInMs / 1000);
+  const target = `${env.tally.host}:${env.tally.port}`;
+
+  if (REFUSED_CODES.has(lastFailureCode)) {
+    return (
+      `Nothing is listening on ${target}, so requests are paused for ${seconds}s. ` +
+      "Open TallyPrime and enable F1: Help > Settings > Connectivity > " +
+      "Client/Server configuration (TallyPrime acts as: Server)."
+    );
+  }
+
+  return (
+    `TallyPrime accepted the connection on ${target} but never answered, ` +
+    `so requests are paused for ${seconds}s. Either a dialog is open in ` +
+    "TallyPrime, or another TallyPrime process is holding the port and the " +
+    "window you are looking at never bound it — check for a second tally.exe. " +
+    "The connection retries automatically."
+  );
+}
+
 /** Error thrown instead of waiting when Tally is known to be unavailable. */
 class TallyUnavailableError extends Error {
-  constructor(retryInMs, consecutiveFailures) {
-    super(
-      `TallyPrime is not responding and is paused for ${Math.ceil(retryInMs / 1000)}s. ` +
-      "Close any open dialog in TallyPrime; the connection retries automatically."
-    );
+  constructor(retryInMs, consecutiveFailures, lastFailureCode) {
+    super(buildUnavailableMessage(retryInMs, lastFailureCode));
     this.name = "TallyUnavailableError";
     // Callers classify on `code`, exactly as they do for axios errors.
     this.code = "ETALLYUNAVAILABLE";
     this.isTallyUnavailable = true;
     this.retryInMs = retryInMs;
     this.consecutiveFailures = consecutiveFailures;
+    // Which fault opened the breaker, so diagnostics can stay specific.
+    this.lastFailureCode = lastFailureCode || null;
     this.responseTimeMs = 0;
   }
 }
@@ -84,7 +122,7 @@ function isOpen() {
 /** Throw immediately when Tally is in cooldown. Called before every request. */
 function assertAvailable() {
   const wait = retryInMs();
-  if (wait > 0) throw new TallyUnavailableError(wait, state.consecutiveFailures);
+  if (wait > 0) throw new TallyUnavailableError(wait, state.consecutiveFailures, state.lastFailureCode);
 }
 
 function recordSuccess() {

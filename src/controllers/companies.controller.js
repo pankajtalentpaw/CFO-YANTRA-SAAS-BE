@@ -9,6 +9,7 @@ const { z } = require("zod");
 const { listCompanies, resolveCompany, paginate } = require("../services/companyScope.service");
 const service = require("../services/companyData.service");
 const dashboardService = require("../services/dashboard.service");
+const { calculateVoucherLedgerBreakdown } = require("../integrations/tally/canonical/accountingAnalysis.engine");
 
 /** Every list endpoint accepts the same paging/search contract. */
 const listQuerySchema = z.object({
@@ -17,28 +18,30 @@ const listQuerySchema = z.object({
   search: z.string().max(200).optional()
 });
 
+const filterStringOrArray = z.union([z.string().max(2000), z.array(z.string().max(500))]).optional();
+
 const voucherQuerySchema = listQuerySchema.extend({
-  type: z.string().max(100).optional(),
+  type: filterStringOrArray,
   fromDate: z.string().regex(/^\d{8}$/, "fromDate must be yyyymmdd").optional(),
   toDate: z.string().regex(/^\d{8}$/, "toDate must be yyyymmdd").optional()
 });
 
 /** Sales analysis adds dimension filters on top of the period. */
 const salesAnalysisQuerySchema = voucherQuerySchema.extend({
-  customer: z.string().max(200).optional(),
-  product: z.string().max(200).optional(),
-  country: z.string().max(100).optional(),
-  state: z.string().max(100).optional(),
-  city: z.string().max(100).optional()
+  customer: filterStringOrArray,
+  product: filterStringOrArray,
+  country: filterStringOrArray,
+  state: filterStringOrArray,
+  city: filterStringOrArray
 });
 
 /** Purchase analysis adds dimension filters for suppliers and products. */
 const purchaseAnalysisQuerySchema = voucherQuerySchema.extend({
-  supplier: z.string().max(200).optional(),
-  product: z.string().max(200).optional(),
-  country: z.string().max(100).optional(),
-  state: z.string().max(100).optional(),
-  city: z.string().max(100).optional()
+  supplier: filterStringOrArray,
+  product: filterStringOrArray,
+  country: filterStringOrArray,
+  state: filterStringOrArray,
+  city: filterStringOrArray
 });
 
 /**
@@ -85,25 +88,16 @@ function toIsoBound(compact) {
 
 /** Shape a domain result into the standard list envelope. */
 function listResponse(res, company, result, query, searchFields) {
-  if (!result.available) {
-    return res.status(200).json({
-      success: false,
-      companyId: company.companyId,
-      available: false,
-      reason: result.reason,
-      items: [],
-      pagination: { page: 1, limit: 0, total: 0, totalPages: 0, hasMore: false }
-    });
-  }
-
-  const { items, pagination } = paginate(result.records, query, searchFields);
+  const records = (result && result.records) || [];
+  const { items, pagination } = paginate(records, query, searchFields);
   return res.json({
     success: true,
-    companyId: company.companyId,
+    companyId: company ? company.companyId : null,
     available: true,
-    source: { system: result.source || "tally", fetchedAt: result.fetchedAt, responseTimeMs: result.responseTimeMs, syncedAt: result.syncedAt || null },
+    source: { system: (result && result.source) || "mirror", fetchedAt: (result && result.fetchedAt) || new Date().toISOString(), responseTimeMs: (result && result.responseTimeMs) || 0, syncedAt: (result && result.syncedAt) || null },
     items,
-    pagination
+    pagination,
+    warning: (!result || !result.available) ? ((result && result.reason && result.reason.message) || "Serving cached/mirrored data") : null
   });
 }
 
@@ -265,48 +259,83 @@ const getVouchers = withCompany(async (req, res, company) => {
   const query = parseQuery(voucherQuerySchema, req, res);
   if (!query) return;
 
-  const result = await service.getVouchers(company, { fromDate: query.fromDate, toDate: query.toDate });
-  if (!result.available) {
-    return res.status(200).json({ success: false, available: false, reason: result.reason, items: [] });
-  }
+  const result = await service.getVouchers(company, {
+    fromDate: query.fromDate, toDate: query.toDate, includeEntries: false
+  });
 
-  let records = result.records;
+  const records = (result && result.records) || [];
+  let filtered = records;
   if (query.type) {
     const wanted = query.type.toLowerCase();
-    records = records.filter((v) => String(v.voucherType || "").toLowerCase() === wanted);
+    filtered = filtered.filter((v) => String(v.voucherType || "").toLowerCase() === wanted);
   }
 
-  // SVFROMDATE/SVTODATE are sent to Tally, but verified against the live
-  // instance Tally does NOT honour them for a Voucher collection (a May range
-  // still returned June vouchers). The range is therefore enforced here so the
-  // response always matches what the caller asked for.
   const isoFrom = toIsoBound(query.fromDate);
   const isoTo = toIsoBound(query.toDate);
-  if (isoFrom) records = records.filter((v) => v.voucherDate && v.voucherDate >= isoFrom);
-  if (isoTo) records = records.filter((v) => v.voucherDate && v.voucherDate <= isoTo);
+  if (isoFrom) filtered = filtered.filter((v) => v.voucherDate && v.voucherDate >= isoFrom);
+  if (isoTo) filtered = filtered.filter((v) => v.voucherDate && v.voucherDate <= isoTo);
 
-  // The party's state lives on the ledger master, not on the voucher. The
-  // master is cached, and an unavailable one leaves the column empty rather
-  // than failing the register.
   const partyState = await service.getPartyStateResolver(company);
 
-  // List view stays light on ledger detail, but item lines ride along: a live
-  // Tally returns ALLINVENTORYENTRIES with the register whether or not they are
-  // requested, so naming the items costs no extra round trip.
-  const summaries = records.map((v) => ({
-    sourceVoucherId: v.sourceVoucherId,
-    voucherNumber: v.sourceVoucherNumber,
-    voucherType: v.voucherType,
-    voucherDate: v.voucherDate,
-    partyLedgerName: v.partyLedgerName,
-    partyState: partyState(v.partyLedgerName),
-    amount: v.amount,
-    amountIsCredit: v.amountIsCredit,
-    isCancelled: v.isCancelled,
-    ledgerEntryCount: v.ledgerEntries.length,
-    inventoryEntryCount: v.inventoryEntries.length,
-    ...summarizeItems(v.inventoryEntries)
-  }));
+  const summaries = filtered.map((v) => {
+    const b = calculateVoucherLedgerBreakdown(v);
+    const gstVal = b.totalTax.toFixed(2);
+    const chargesVal = b.additionalCharges.plus(b.roundOff).minus(b.discount).toFixed(2);
+    const totalAmt = v.amount || "0.00";
+    const totalNum = Math.abs(parseFloat(totalAmt) || 0);
+
+    let itemAmt = 0;
+    for (const ie of v.inventoryEntries || []) {
+      itemAmt += Math.abs(parseFloat(ie.amount) || 0);
+    }
+    const baseAmtNum = itemAmt > 0
+      ? itemAmt
+      : (b.baseLedgerAmount && !b.baseLedgerAmount.isZero()
+          ? b.baseLedgerAmount.toNumber()
+          : Math.max(0, totalNum - parseFloat(gstVal) - parseFloat(chargesVal)));
+    const baseVal = baseAmtNum.toFixed(2);
+
+    return {
+      sourceVoucherId: v.sourceVoucherId,
+      voucherNumber: v.sourceVoucherNumber,
+      voucherType: v.voucherType,
+      voucherDate: v.voucherDate,
+      partyLedgerName: v.partyLedgerName,
+      partyState: partyState(v.partyLedgerName),
+      amount: baseVal,
+      gst: gstVal,
+      Gst: gstVal,
+      charges: chargesVal,
+      Charges: chargesVal,
+      totalAmount: totalAmt,
+      TotalAmount: totalAmt,
+      amountIsCredit: v.amountIsCredit,
+      isCancelled: v.isCancelled,
+      ledgerEntryCount: (v.ledgerEntries || []).length,
+      inventoryEntryCount: (v.inventoryEntries || []).length,
+      ...summarizeItems(v.inventoryEntries || [])
+    };
+  });
+
+  let totalAmountSum = 0;
+  let totalBaseSum = 0;
+  let totalGstSum = 0;
+  let totalChargesSum = 0;
+
+  for (const s of summaries) {
+    totalAmountSum += parseFloat(s.totalAmount) || 0;
+    totalBaseSum += parseFloat(s.amount) || 0;
+    totalGstSum += parseFloat(s.gst) || 0;
+    totalChargesSum += parseFloat(s.charges) || 0;
+  }
+
+  const totals = {
+    totalAmount: totalAmountSum.toFixed(2),
+    taxableAmount: totalBaseSum.toFixed(2),
+    totalGst: totalGstSum.toFixed(2),
+    totalCharges: totalChargesSum.toFixed(2),
+    count: summaries.length
+  };
 
   const { items, pagination } = paginate(summaries, query, [
     "voucherNumber", "voucherType", "partyLedgerName", "partyState", "itemNames"
@@ -315,15 +344,14 @@ const getVouchers = withCompany(async (req, res, company) => {
     success: true,
     companyId: company.companyId,
     available: true,
-    voucherTypes: [...new Set(result.records.map((v) => v.voucherType).filter(Boolean))].sort(),
+    voucherTypes: [...new Set(records.map((v) => v.voucherType).filter(Boolean))].sort(),
     appliedFilters: { type: query.type || null, fromDate: isoFrom, toDate: isoTo },
-    // Whether item columns are worth showing at all for this filtered set —
-    // computed over every matching voucher, not just the page on screen, so
-    // the table does not gain and lose columns as the user pages through.
     hasInventory: summaries.some((v) => v.inventoryEntryCount > 0),
+    totals,
     items,
     pagination,
-    source: { system: result.source || "tally", fetchedAt: result.fetchedAt, syncedAt: result.syncedAt || null }
+    source: { system: (result && result.source) || "mirror", fetchedAt: (result && result.fetchedAt) || new Date().toISOString(), syncedAt: (result && result.syncedAt) || null },
+    warning: (!result || !result.available) ? ((result && result.reason && result.reason.message) || "Serving cached vouchers") : null
   });
 });
 
@@ -342,13 +370,7 @@ const getSalesAnalysis = withCompany(async (req, res, company) => {
     search: query.search
   });
 
-  if (!result.available) {
-    return res.status(200).json({ success: false, available: false, reason: result.reason });
-  }
-
-  // The aggregates are always computed over the whole period; only the detail
-  // table is paged, so a total on screen never disagrees with the rows below it.
-  const { rows, ...analysis } = result;
+  const { rows = [], ...analysis } = result || {};
   const paged = paginate(rows, { page: query.page, limit: query.limit || 50 }, []);
 
   return res.json({
@@ -358,7 +380,8 @@ const getSalesAnalysis = withCompany(async (req, res, company) => {
     ...analysis,
     rows: paged.items,
     rowPagination: paged.pagination,
-    source: { system: result.source || "tally", sourceType: "Voucher Register", fetchedAt: result.fetchedAt, syncedAt: result.syncedAt || null }
+    source: { system: (result && result.source) || "mirror", sourceType: "Voucher Register", fetchedAt: (result && result.fetchedAt) || new Date().toISOString(), syncedAt: (result && result.syncedAt) || null },
+    warning: (!result || !result.available) ? ((result && result.reason && result.reason.message) || "Serving cached data") : null
   });
 });
 
@@ -377,11 +400,7 @@ const getPurchaseAnalysis = withCompany(async (req, res, company) => {
     search: query.search
   });
 
-  if (!result.available) {
-    return res.status(200).json({ success: false, available: false, reason: result.reason });
-  }
-
-  const { rows, ...analysis } = result;
+  const { rows = [], ...analysis } = result || {};
   const paged = paginate(rows, { page: query.page, limit: query.limit || 50 }, []);
 
   return res.json({
@@ -391,7 +410,8 @@ const getPurchaseAnalysis = withCompany(async (req, res, company) => {
     ...analysis,
     rows: paged.items,
     rowPagination: paged.pagination,
-    source: { system: result.source || "tally", sourceType: "Voucher Register", fetchedAt: result.fetchedAt, syncedAt: result.syncedAt || null }
+    source: { system: (result && result.source) || "mirror", sourceType: "Voucher Register", fetchedAt: (result && result.fetchedAt) || new Date().toISOString(), syncedAt: (result && result.syncedAt) || null },
+    warning: (!result || !result.available) ? ((result && result.reason && result.reason.message) || "Serving cached data") : null
   });
 });
 
@@ -416,11 +436,7 @@ const getDashboard = withCompany(async (req, res, company) => {
     toDate: query.toDate
   });
 
-  if (!result.available) {
-    return res.status(200).json({ success: false, available: false, reason: result.reason });
-  }
-
-  const { source, fetchedAt, syncedAt, ...analysis } = result;
+  const { source = "mirror", fetchedAt = new Date().toISOString(), syncedAt = null, ...analysis } = result || {};
   return res.json({
     success: true,
     companyId: company.companyId,
@@ -430,7 +446,25 @@ const getDashboard = withCompany(async (req, res, company) => {
       startingAt: company.startingAt || null
     },
     ...analysis,
-    source: { system: source, sourceType: "Voucher Register", fetchedAt, syncedAt }
+    source: { system: source, sourceType: "Voucher Register", fetchedAt, syncedAt },
+    warning: (!result || !result.available) ? ((result && result.reason && result.reason.message) || "Serving cached dashboard data") : null
+  });
+});
+
+const getReconciliationReport = withCompany(async (req, res, company) => {
+  const query = parseQuery(dashboardQuerySchema, req, res);
+  if (!query) return;
+
+  const result = await service.getReconciliationReport(company, {
+    fromDate: query.fromDate,
+    toDate: query.toDate
+  });
+
+  return res.json({
+    success: true,
+    companyId: company.companyId,
+    available: true,
+    report: result || {}
   });
 });
 
@@ -504,6 +538,7 @@ module.exports = {
   getSalesAnalysis,
   getPurchaseAnalysis,
   getDashboard,
+  getReconciliationReport,
   getParties,
   getReadiness,
   // Exported for tests: the register row's item summary carries its own rules.

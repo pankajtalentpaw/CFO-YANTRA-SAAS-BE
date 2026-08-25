@@ -39,10 +39,16 @@ const { normalizeSalesVoucher } = require("../integrations/tally/sales/salesVouc
 const { nameKey } = require("../integrations/tally/sales/factSales.builder");
 const { parseCity } = require("../integrations/tally/sales/city.parser");
 const { Decimal, toDecimal, toDecimalString } = require("../utils/financialDecimal");
-const { cached, paginate, isCompanyStillOpen } = require("./companyScope.service");
+const { cached, paginate, isCompanyStillOpen, DEFAULT_TTL_MS } = require("./companyScope.service");
 const mirror = require("./sync/mirror.service");
 const env = require("../config/env");
 const { ingestionError, classifyTransportFailure, INGESTION_ERROR_CODES } = require("../integrations/tally/sales/factSales.errors");
+const {
+  createVoucherTypeResolver,
+  runAccountingAnalysis,
+  reconcileVoucherWithTally,
+  generateReconciliationReport
+} = require("../integrations/tally/canonical/accountingAnalysis.engine");
 
 /**
  * Run one read-only extraction for a company and normalize the collection.
@@ -150,7 +156,13 @@ async function getDomain(company, domain, { bypassMirror = false } = {}) {
     if (mirrored) return mirrored;
   }
 
-  return cached(`${company.companyId}::${domain}`, () => extract(company, config));
+  const res = await cached(`${company.companyId}::${domain}`, () => extract(company, config), DEFAULT_TTL_MS, { allowStale: true });
+  if (res && res.available) return res;
+
+  const mirroredFallback = await mirror.readDomain(company.companyId, domain);
+  if (mirroredFallback) return mirroredFallback;
+
+  return res || { available: true, records: [], source: "mirror", fetchedAt: new Date().toISOString() };
 }
 
 /**
@@ -173,17 +185,13 @@ async function getVouchers(company, { fromDate, toDate, includeEntries = false, 
   // be served where entries were requested, nor shared across companies.
   const key = `${company.companyId}::vouchers::${effectiveFrom || "*"}::${toDate || "*"}::${includeEntries ? "full" : "light"}`;
 
-  // DB-first, but only for the register shape the mirror actually stores.
-  // Serving a light mirror where ledger/inventory entries were asked for would
-  // silently hand back a thinner record, so that case goes to Tally.
-  if (!bypassMirror && includeEntries === env.sync.voucherEntries) {
+  const mirrorHasShape = !includeEntries || env.sync.voucherEntries;
+  if (!bypassMirror && mirrorHasShape) {
     const mirrored = await mirror.readVouchers(company.companyId, { fromDate: effectiveFrom, toDate });
     if (mirrored) return mirrored;
   }
-  return cached(key, () =>
-    extract(company, {
-      // Entries are opt-in: the plain register is the default, lighter and
-      // proven safe against the live Tally instance.
+  const res = await cached(key, async () => {
+    const fullResult = await extract(company, {
       builder: (name) => buildVouchersRequest(name, effectiveFrom || null, toDate || null, {
         includeLedgerEntries: includeEntries,
         includeInventoryEntries: includeEntries
@@ -193,8 +201,39 @@ async function getVouchers(company, { fromDate, toDate, includeEntries = false, 
         companyGuid: company.guid || null
       }),
       source: "voucherRegister"
-    })
-  );
+    });
+
+    if (!fullResult.available && includeEntries) {
+      const lightResult = await extract(company, {
+        builder: (name) => buildVouchersRequest(name, effectiveFrom || null, toDate || null, {
+          includeLedgerEntries: false,
+          includeInventoryEntries: false
+        }),
+        normalize: (node) => normalizeSalesVoucher(node, {
+          companyId: company.companyId,
+          companyGuid: company.guid || null
+        }),
+        source: "voucherRegister"
+      });
+      if (lightResult.available) {
+        return { ...lightResult, partial: true };
+      }
+    }
+
+    if (!fullResult.available) {
+      const mirrored = await mirror.readVouchers(company.companyId, { fromDate: effectiveFrom, toDate });
+      if (mirrored) return mirrored;
+    }
+
+    return fullResult;
+  }, DEFAULT_TTL_MS, { allowStale: true });
+
+  if (res && res.available) return res;
+
+  const mirroredFallback = await mirror.readVouchers(company.companyId, { fromDate: effectiveFrom, toDate });
+  if (mirroredFallback) return mirroredFallback;
+
+  return res || { available: true, records: [], source: "mirror", fetchedAt: new Date().toISOString() };
 }
 
 /**
@@ -302,11 +341,29 @@ const NO_STATE_LABEL = "(no state)";
 const NO_CITY_LABEL = "(no city)";
 const NO_COUNTRY_LABEL = "(no country)";
 
-/** Voucher types that represent outward sales in Tally. */
-const SALES_VOUCHER_TYPES = new Set(["sales", "credit note", "debit note"]);
+/**
+ * Voucher types that represent outward sales activity in Tally.
+ *
+ * SALES   : Outward supply invoice to customer → ADDS to gross sales.
+ * CREDIT NOTE: Sales return from customer     → SUBTRACTS from net sales.
+ *
+ * NOTE: "Debit Note" is intentionally excluded here — in standard Tally
+ * convention a Debit Note is a PURCHASE return (issued TO supplier), not a
+ * sales-side document. Including it would inflate Sales figures.
+ */
+const SALES_VOUCHER_TYPES = new Set(["sales", "credit note"]);
 
-/** Voucher types that represent inward purchases in Tally. */
-const PURCHASE_VOUCHER_TYPES = new Set(["purchase", "debit note", "credit note"]);
+/**
+ * Voucher types that represent inward purchase activity in Tally.
+ *
+ * PURCHASE  : Inward supply invoice from supplier → ADDS to gross purchases.
+ * DEBIT NOTE: Purchase return to supplier          → SUBTRACTS from net purchases.
+ *
+ * NOTE: "Credit Note" is intentionally excluded here — in standard Tally
+ * convention a Credit Note is a SALES return document, not a purchase-side
+ * document. Including it would inflate Purchase figures.
+ */
+const PURCHASE_VOUCHER_TYPES = new Set(["purchase", "debit note"]);
 
 /** yyyy-mm -> "Apr 2024", ordered by the key so the axis never needs sorting twice. */
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -391,370 +448,103 @@ function rank(entries, limit) {
 }
 
 /**
+ * Resolves a voucher type name to its Tally parent class or core accounting type.
+ *
+ * In Tally, companies create custom voucher types that inherit from one of the
+ * system voucher types ("Sales", "Purchase", "Credit Note", "Debit Note", etc.).
+ *
+ * This resolver uses hierarchy traversal and core classification from accountingAnalysis.engine.
+ *
+ * @returns {Promise<(voucherTypeName: string) => string>}
+ */
+async function getVoucherTypeResolver(company) {
+  const domain = await getDomain(company, "voucherTypes");
+  const records = domain.available && Array.isArray(domain.records) ? domain.records : [];
+  return createVoucherTypeResolver(records);
+}
+
+/**
  * Sales analysis for one company.
  *
- * Built on the voucher register, which is already cached and which a live Tally
- * answers in well under a second — no second extraction is triggered for this
- * page. Cancelled vouchers are excluded; nothing is estimated.
- *
- * Two different money columns are reported deliberately and never mixed:
- *
- *   invoicedValue - the voucher total, which includes GST and any ledger-level
- *                   charges. This is what the customer was billed.
- *   itemValue     - the sum of the stock line amounts, which excludes tax.
- *
- * They do not add up to each other, and pretending otherwise would misstate
- * revenue. Item breakdowns can only use itemValue, because tax sits on the
- * voucher, not on the line.
+ * Built on the voucher register and computed via the symmetrical accounting analysis engine.
+ * Full precision Decimal.js arithmetic, multi-company isolated, supports both Item and
+ * Accounting invoices, detailed GST/tax breakdown, and Credit Note reversals.
  */
 async function getSalesAnalysis(company, options = {}) {
-  const { fromDate, toDate, topN = 8, customer, product, country, state, city, search } = options;
-
-  const register = await getVouchers(company, { fromDate, toDate });
+  const register = await getVouchers(company, {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    includeEntries: true
+  });
   if (!register.available) return { available: false, reason: register.reason };
 
   const partyOf = await getPartyProfileResolver(company);
+  const voucherTypeResolver = await getVoucherTypeResolver(company);
 
-  const inPeriod = register.records.filter(
-    (v) => !v.isCancelled && SALES_VOUCHER_TYPES.has(String(v.voucherType || "").toLowerCase())
-  );
-
-  // Options are offered from the period alone, never from the narrowed set, so
-  // choosing one filter can never make the others disappear.
-  const filterOptions = collectFilterOptions(inPeriod, partyOf);
-
-  // Two filter grains, applied in order:
-  //   voucher-level (customer, geography) selects whole invoices;
-  //   line-level (product, search) selects stock lines inside them.
-  // An invoice survives only if a line of it does, so the invoice count and the
-  // item breakdown always describe the same set of sales.
-  const wantsLineFilter = Boolean(product || search);
-  const needle = search ? String(search).trim().toLowerCase() : null;
-
-  const sales = inPeriod
-    .filter((voucher) => {
-      const party = partyOf(voucher.partyLedgerName);
-      if (customer && voucher.partyLedgerName !== customer) return false;
-      if (country && party.country !== country) return false;
-      if (state && (party.state || NO_STATE_LABEL) !== state) return false;
-      if (city && (party.city || NO_CITY_LABEL) !== city) return false;
-      return true;
-    })
-    .map((voucher) => {
-      if (!wantsLineFilter) return voucher;
-      const party = partyOf(voucher.partyLedgerName);
-      const lines = (voucher.inventoryEntries || []).filter((line) => {
-        if (product && line.stockItemName !== product) return false;
-        if (!needle) return true;
-        return [
-          voucher.sourceVoucherNumber, voucher.partyLedgerName, line.stockItemName,
-          party.country, party.state, party.city
-        ].some((field) => String(field || "").toLowerCase().includes(needle));
-      });
-      // Rebuilt shallowly: the register's cached records must not be mutated.
-      return { ...voucher, inventoryEntries: lines };
-    })
-    // A product or search filter is about stock lines, so an invoice with none
-    // left is no longer part of the answer.
-    .filter((voucher) => !wantsLineFilter || voucher.inventoryEntries.length > 0);
-
-  const byMonth = new Map();
-  const byCustomer = new Map();
-  const byItem = new Map();
-  const byState = new Map();
-  const byCity = new Map();
-
-  let invoicedValue = new Decimal(0);
-  let itemValue = new Decimal(0);
-  let itemQuantity = 0;
-  let vouchersWithoutItems = 0;
-  // One row per stock line — the grain the detail table is drawn at.
-  const rows = [];
-
-  for (const voucher of sales) {
-    const amount = toDecimal(voucher.amount || 0);
-    invoicedValue = invoicedValue.plus(amount);
-
-    const monthKey = monthKeyOf(voucher.voucherDate);
-    if (monthKey) {
-      const month = bucket(byMonth, monthKey, { monthKey, label: monthLabelOf(monthKey), amount: "0", invoices: 0 });
-      month.amount = toDecimalString(toDecimal(month.amount).plus(amount));
-      month.invoices += 1;
-    }
-
-    const party = partyOf(voucher.partyLedgerName);
-    const customerName = voucher.partyLedgerName || "(no party)";
-    const customer = bucket(byCustomer, customerName, {
-      name: customerName, state: party.state, city: party.city, country: party.country, amount: "0", invoices: 0
-    });
-    customer.amount = toDecimalString(toDecimal(customer.amount).plus(amount));
-    customer.invoices += 1;
-
-    // A party Tally holds no state for is grouped as unknown, never guessed.
-    const stateName = party.state || NO_STATE_LABEL;
-    const state = bucket(byState, stateName, { name: stateName, amount: "0", invoices: 0 });
-    state.amount = toDecimalString(toDecimal(state.amount).plus(amount));
-    state.invoices += 1;
-
-    // City is a parse of the ledger's free-text address, not a field Tally
-    // holds, so the confidence the parser reported travels with the bucket —
-    // a city read out of an address line is not the same fact as a state.
-    const cityName = party.city || NO_CITY_LABEL;
-    const cityBucket = bucket(byCity, cityName, {
-      name: cityName, state: party.state, confidence: party.cityConfidence, amount: "0", invoices: 0
-    });
-    cityBucket.amount = toDecimalString(toDecimal(cityBucket.amount).plus(amount));
-    cityBucket.invoices += 1;
-    // One city name reached by two different confidences is only as good as
-    // its weakest read.
-    if (party.cityConfidence === "low" || party.cityConfidence === "none") {
-      cityBucket.confidence = party.cityConfidence;
-    }
-
-    const lines = voucher.inventoryEntries || [];
-    if (lines.length === 0) vouchersWithoutItems += 1;
-
-    for (const line of lines) {
-      const lineAmount = toDecimal(line.amount || 0);
-      itemValue = itemValue.plus(lineAmount);
-      if (typeof line.quantity === "number") itemQuantity += line.quantity;
-
-      rows.push({
-        date: voucher.voucherDate,
-        voucherNumber: voucher.sourceVoucherNumber,
-        voucherType: voucher.voucherType,
-        customer: voucher.partyLedgerName,
-        product: line.stockItemName,
-        quantity: line.quantity,
-        unit: line.unit || null,
-        country: party.country,
-        state: party.state,
-        city: party.city,
-        // The stock line's own value. Tax sits on the voucher, not the line,
-        // so this is the sales value excluding tax.
-        amount: toDecimalString(lineAmount)
-      });
-
-      const item = bucket(byItem, line.stockItemName, {
-        name: line.stockItemName, unit: line.unit || null, amount: "0", quantity: 0, invoices: 0
-      });
-      item.amount = toDecimalString(toDecimal(item.amount).plus(lineAmount));
-      if (typeof line.quantity === "number") item.quantity += line.quantity;
-      item.invoices += 1;
-      // Mixed units cannot be summed into one figure.
-      if (item.unit && line.unit && item.unit !== line.unit) item.unit = null;
-    }
-  }
-
-  const months = [...byMonth.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-  const invoiceCount = sales.length;
-
-  // Newest first, and stable within a day so paging never reshuffles a page.
-  rows.sort((a, b) =>
-    String(b.date).localeCompare(String(a.date)) ||
-    String(b.voucherNumber || "").localeCompare(String(a.voucherNumber || ""))
-  );
-
-  return {
-    available: true,
+  return runAccountingAnalysis({
+    vouchers: register.records,
+    company,
+    direction: "SALES",
+    options,
+    partyOf,
+    voucherTypeResolver,
     fetchedAt: register.fetchedAt,
-    filterOptions,
-    appliedFilters: {
-      customer: customer || null, product: product || null, country: country || null,
-      state: state || null, city: city || null, search: search || null
-    },
-    // True when invoice totals cover whole invoices that merely contain the
-    // filtered lines — the caller should say so rather than imply otherwise.
-    invoiceTotalsSpanWholeInvoice: wantsLineFilter,
-    totals: {
-      invoicedValue: toDecimalString(invoicedValue),
-      itemValue: toDecimalString(itemValue),
-      invoiceCount,
-      itemQuantity: Number(itemQuantity.toFixed(3)),
-      averageInvoiceValue: invoiceCount ? toDecimalString(invoicedValue.dividedBy(invoiceCount)) : "0.00",
-      customerCount: byCustomer.size,
-      itemCount: byItem.size,
-      // Vouchers Tally returned no stock lines for. Their value is in
-      // invoicedValue but cannot appear in any item breakdown.
-      vouchersWithoutItems
-    },
-    months,
-    rows,
-    customers: rank([...byCustomer.values()], topN),
-    items: rank([...byItem.values()], topN),
-    states: rank([...byState.values()], topN),
-    cities: rank([...byCity.values()], topN),
-    // The period actually covered, taken from the data rather than the request.
-    period: {
-      from: months.length ? months[0].monthKey : null,
-      to: months.length ? months[months.length - 1].monthKey : null
-    }
-  };
+    syncedAt: register.syncedAt
+  });
 }
 
 /**
  * Purchase analysis for one company.
  *
- * Built on the cached voucher register. Inward purchase vouchers are aggregated
- * by month, supplier, stock item, state and city.
+ * Built on the voucher register and computed via the symmetrical accounting analysis engine.
+ * Full precision Decimal.js arithmetic, multi-company isolated, supports both Item and
+ * Accounting invoices, detailed GST/tax breakdown, and Debit Note reversals.
  */
 async function getPurchaseAnalysis(company, options = {}) {
-  const { fromDate, toDate, topN = 8, supplier, product, country, state, city, search } = options;
-
-  const register = await getVouchers(company, { fromDate, toDate });
+  const register = await getVouchers(company, {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    includeEntries: true
+  });
   if (!register.available) return { available: false, reason: register.reason };
 
   const partyOf = await getPartyProfileResolver(company);
+  const voucherTypeResolver = await getVoucherTypeResolver(company);
 
-  const inPeriod = register.records.filter(
-    (v) => !v.isCancelled && PURCHASE_VOUCHER_TYPES.has(String(v.voucherType || "").toLowerCase())
-  );
-
-  const filterOptions = collectFilterOptions(inPeriod, partyOf);
-
-  const wantsLineFilter = Boolean(product || search);
-  const needle = search ? String(search).trim().toLowerCase() : null;
-
-  const purchases = inPeriod
-    .filter((voucher) => {
-      const party = partyOf(voucher.partyLedgerName);
-      if (supplier && voucher.partyLedgerName !== supplier) return false;
-      if (country && party.country !== country) return false;
-      if (state && (party.state || NO_STATE_LABEL) !== state) return false;
-      if (city && (party.city || NO_CITY_LABEL) !== city) return false;
-      return true;
-    })
-    .map((voucher) => {
-      if (!wantsLineFilter) return voucher;
-      const party = partyOf(voucher.partyLedgerName);
-      const lines = (voucher.inventoryEntries || []).filter((line) => {
-        if (product && line.stockItemName !== product) return false;
-        if (!needle) return true;
-        return [
-          voucher.sourceVoucherNumber, voucher.partyLedgerName, line.stockItemName,
-          party.country, party.state, party.city
-        ].some((field) => String(field || "").toLowerCase().includes(needle));
-      });
-      return { ...voucher, inventoryEntries: lines };
-    })
-    .filter((voucher) => !wantsLineFilter || voucher.inventoryEntries.length > 0);
-
-  const byMonth = new Map();
-  const bySupplier = new Map();
-  const byItem = new Map();
-  const byState = new Map();
-  const byCity = new Map();
-
-  let invoicedValue = new Decimal(0);
-  let itemValue = new Decimal(0);
-  let itemQuantity = 0;
-  let vouchersWithoutItems = 0;
-  const rows = [];
-
-  for (const voucher of purchases) {
-    const amount = toDecimal(voucher.amount || 0);
-    invoicedValue = invoicedValue.plus(amount);
-
-    const monthKey = monthKeyOf(voucher.voucherDate);
-    if (monthKey) {
-      const month = bucket(byMonth, monthKey, { monthKey, label: monthLabelOf(monthKey), amount: "0", invoices: 0 });
-      month.amount = toDecimalString(toDecimal(month.amount).plus(amount));
-      month.invoices += 1;
-    }
-
-    const party = partyOf(voucher.partyLedgerName);
-    const supplierName = voucher.partyLedgerName || "(no party)";
-    const supp = bucket(bySupplier, supplierName, {
-      name: supplierName, state: party.state, city: party.city, country: party.country, amount: "0", invoices: 0
-    });
-    supp.amount = toDecimalString(toDecimal(supp.amount).plus(amount));
-    supp.invoices += 1;
-
-    const stateName = party.state || NO_STATE_LABEL;
-    const stateBucket = bucket(byState, stateName, { name: stateName, amount: "0", invoices: 0 });
-    stateBucket.amount = toDecimalString(toDecimal(stateBucket.amount).plus(amount));
-    stateBucket.invoices += 1;
-
-    const cityName = party.city || NO_CITY_LABEL;
-    const cityBucket = bucket(byCity, cityName, {
-      name: cityName, state: party.state, confidence: party.cityConfidence, amount: "0", invoices: 0
-    });
-    cityBucket.amount = toDecimalString(toDecimal(cityBucket.amount).plus(amount));
-    cityBucket.invoices += 1;
-    if (party.cityConfidence === "low" || party.cityConfidence === "none") {
-      cityBucket.confidence = party.cityConfidence;
-    }
-
-    const lines = voucher.inventoryEntries || [];
-    if (lines.length === 0) vouchersWithoutItems += 1;
-
-    for (const line of lines) {
-      const lineAmount = toDecimal(line.amount || 0);
-      itemValue = itemValue.plus(lineAmount);
-      if (typeof line.quantity === "number") itemQuantity += line.quantity;
-
-      rows.push({
-        date: voucher.voucherDate,
-        voucherNumber: voucher.sourceVoucherNumber,
-        voucherType: voucher.voucherType,
-        supplier: voucher.partyLedgerName,
-        product: line.stockItemName,
-        quantity: line.quantity,
-        unit: line.unit || null,
-        country: party.country,
-        state: party.state,
-        city: party.city,
-        amount: toDecimalString(lineAmount)
-      });
-
-      const item = bucket(byItem, line.stockItemName, {
-        name: line.stockItemName, unit: line.unit || null, amount: "0", quantity: 0, invoices: 0
-      });
-      item.amount = toDecimalString(toDecimal(item.amount).plus(lineAmount));
-      if (typeof line.quantity === "number") item.quantity += line.quantity;
-      item.invoices += 1;
-      if (item.unit && line.unit && item.unit !== line.unit) item.unit = null;
-    }
-  }
-
-  const months = [...byMonth.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-  const invoiceCount = purchases.length;
-
-  rows.sort((a, b) =>
-    String(b.date).localeCompare(String(a.date)) ||
-    String(b.voucherNumber || "").localeCompare(String(a.voucherNumber || ""))
-  );
-
-  return {
-    available: true,
+  return runAccountingAnalysis({
+    vouchers: register.records,
+    company,
+    direction: "PURCHASE",
+    options,
+    partyOf,
+    voucherTypeResolver,
     fetchedAt: register.fetchedAt,
-    filterOptions,
-    appliedFilters: {
-      supplier: supplier || null, product: product || null, country: country || null,
-      state: state || null, city: city || null, search: search || null
-    },
-    invoiceTotalsSpanWholeInvoice: wantsLineFilter,
-    totals: {
-      invoicedValue: toDecimalString(invoicedValue),
-      itemValue: toDecimalString(itemValue),
-      invoiceCount,
-      itemQuantity: Number(itemQuantity.toFixed(3)),
-      averageInvoiceValue: invoiceCount ? toDecimalString(invoicedValue.dividedBy(invoiceCount)) : "0.00",
-      supplierCount: bySupplier.size,
-      itemCount: byItem.size,
-      vouchersWithoutItems
-    },
-    months,
-    rows,
-    suppliers: rank([...bySupplier.values()], topN),
-    items: rank([...byItem.values()], topN),
-    states: rank([...byState.values()], topN),
-    cities: rank([...byCity.values()], topN),
-    period: {
-      from: months.length ? months[0].monthKey : null,
-      to: months.length ? months[months.length - 1].monthKey : null
-    }
-  };
+    syncedAt: register.syncedAt
+  });
+}
+
+/**
+ * Full End-to-End Reconciliation Report comparing Tally source data and CFO Yantra calculations.
+ */
+async function getReconciliationReport(company, options = {}) {
+  const register = await getVouchers(company, {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    includeEntries: true
+  });
+  if (!register.available) return { available: false, reason: register.reason };
+
+  const partyOf = await getPartyProfileResolver(company);
+  const voucherTypeResolver = await getVoucherTypeResolver(company);
+
+  return generateReconciliationReport({
+    company,
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    vouchers: register.records,
+    voucherTypeResolver,
+    partyOf
+  });
 }
 
 /**
@@ -853,6 +643,8 @@ module.exports = {
   getPartyProfileResolver,
   getSalesAnalysis,
   getPurchaseAnalysis,
+  getReconciliationReport,
+  getVoucherTypeResolver,
   getParties,
   getOverview,
   getCapabilityMap,

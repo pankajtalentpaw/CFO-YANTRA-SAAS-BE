@@ -30,5 +30,6 @@ router.get("/:companyId/vouchers/:voucherId", c.getVoucher);
 router.get("/:companyId/sales-analysis", c.getSalesAnalysis);
 router.get("/:companyId/purchase-analysis", c.getPurchaseAnalysis);
 router.get("/:companyId/dashboard", c.getDashboard);
+router.get("/:companyId/reconciliation-report", c.getReconciliationReport);
 
 module.exports = router;

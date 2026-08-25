@@ -200,6 +200,13 @@ function normalizeSalesVoucher(raw, context = {}) {
     parserVersion: PARSER_VERSION,
     syncRunId,
     sourceSystem: "tally",
+    // The mirror upserts every canonical record on `sourceObjectId` and skips
+    // any record that lacks one. Vouchers carried only `sourceVoucherId`, so
+    // every voucher was silently dropped at the mirror boundary while the sync
+    // still reported its read count as `total` — the register looked synced and
+    // the collection stayed empty. Same stable id, under the name the envelope
+    // requires.
+    sourceObjectId: sourceVoucherId,
     sourceVoucherId,
     sourceVoucherNumber: voucherNumber,
     sourceFetchedAt: context.fetchedAt || new Date().toISOString(),

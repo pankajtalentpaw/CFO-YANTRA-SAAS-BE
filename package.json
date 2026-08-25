@@ -5,7 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch-path=./src src/server.js",
+    "dev": "nodemon src/server.js",
+    "lint": "eslint .",
     "test": "jest",
     "probe": "node src/scripts/probe.js",
     "tally:capabilities": "node src/scripts/capabilities.js",
@@ -47,6 +48,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "jest": "^30.4.2"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "globals": "^17.11.0",
+    "jest": "^30.4.2",
+    "nodemon": "^3.1.14"
   }
 }

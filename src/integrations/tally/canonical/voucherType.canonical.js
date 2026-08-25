@@ -1,27 +1,7 @@
 const { recordChecksum } = require("../../../utils/checksum");
 const { deriveStableId, parseBooleanField, PARSER_VERSION, MAPPING_VERSION , flattenTextNodes } = require("./company.canonical");
 
-/**
- * Classify standard voucher type core category
- */
-function classifyVoucherType(name, parent) {
-  const n = (name || "").toLowerCase();
-  const p = (parent || "").toLowerCase();
-
-  if (n.includes("sale") || p.includes("sale")) return "SALES";
-  if (n.includes("purchase") || p.includes("purchase")) return "PURCHASE";
-  if (n.includes("receipt") || p.includes("receipt")) return "RECEIPT";
-  if (n.includes("payment") || p.includes("payment")) return "PAYMENT";
-  if (n.includes("contra") || p.includes("contra")) return "CONTRA";
-  if (n.includes("journal") || p.includes("journal")) return "JOURNAL";
-  if (n.includes("debit note") || p.includes("debit note")) return "DEBIT_NOTE";
-  if (n.includes("credit note") || p.includes("credit note")) return "CREDIT_NOTE";
-  if (n.includes("stock journal") || p.includes("stock journal")) return "STOCK_JOURNAL";
-  if (n.includes("physical stock") || p.includes("physical stock")) return "PHYSICAL_STOCK";
-  if (n.includes("payroll") || p.includes("payroll") || n.includes("attendance")) return "PAYROLL";
-  if (n.includes("order") || p.includes("order")) return "ORDERS";
-  return "OTHER";
-}
+const { classifyVoucherType } = require("./accountingAnalysis.engine");
 
 /**
  * Normalize raw VoucherType into Canonical VoucherType

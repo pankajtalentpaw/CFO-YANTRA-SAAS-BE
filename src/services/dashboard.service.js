@@ -245,7 +245,10 @@ async function getDashboard(company, options = {}) {
   // No date bounds: deliberately the whole register, so this shares the cache
   // entry the other company pages already populated, and so the
   // previous-period comparison has the history it needs.
-  const register = await service.getVouchers(company, {});
+  // Entries included: the top-items panel and the recent-voucher item counts
+  // below both read voucher.inventoryEntries, and the mirror only serves the
+  // shape it was asked for.
+  const register = await service.getVouchers(company, { includeEntries: true });
   if (!register.available) return { available: false, reason: register.reason };
 
   const voucherTypes = await service.getDomain(company, "voucherTypes");
