@@ -1,11 +1,11 @@
 const express = require("express");
 const router = express.Router();
 
-const tallyRoutes = require("./tally.routes");
-const companiesRoutes = require("./companies.routes");
-const diagnosticsRoutes = require("./diagnostics.routes");
-const syncRoutes = require("./sync.routes");
-const cloudRoutes = require("./cloud.routes");
+const tallyRoutes = require("./tallyRoutes");
+const companiesRoutes = require("./companiesRoutes");
+const diagnosticsRoutes = require("./diagnosticsRoutes");
+const syncRoutes = require("./syncRoutes");
+const cloudRoutes = require("./cloudRoutes");
 
 // Health
 router.get("/health", (req, res) => {

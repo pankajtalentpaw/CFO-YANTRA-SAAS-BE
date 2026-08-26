@@ -1,7 +1,3 @@
-const express = require("express");
-const router = express.Router();
-const cloudController = require("../controllers/cloud.controller");
+const cloudRoutes = require("./cloudRoutes");
 
-router.get("/status", cloudController.getCloudStatus);
-
-module.exports = router;
+module.exports = cloudRoutes;

@@ -12,7 +12,7 @@ const NON_CITY_PATTERNS = [
   /^[\d\W]+$/,                    // punctuation/number only
   /\b(p\.?o\.?\s*box|pin|pincode|phone|tel|mob|mobile|email|e-mail|gstin|fax)\b/i,
   /\b(plot|flat|floor|room|survey|khasra|block\s*no|door\s*no|h\.?no)\b/i,
-  /^(india|bharat)$/i
+  /^(india|bharat|haiti|tanzania|nepal|bangladesh|uae|usa|uk|oman|kenya)$/i
 ];
 
 /** Trailing PIN code, optionally prefixed, e.g. "Mumbai - 400001" or "PIN 400001". */

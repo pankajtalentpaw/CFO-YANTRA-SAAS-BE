@@ -1,6 +1,18 @@
-const { buildMirrorModel } = require("./mirrorModel.factory");
-const Company = require("./Company");
-const SyncState = require("./SyncState");
+const Company = require("./companyModel");
+const SyncState = require("./syncStateModel");
+const Voucher = require("./voucherModel");
+const Ledger = require("./ledgerModel");
+const Group = require("./groupModel");
+const StockItem = require("./stockItemModel");
+const StockGroup = require("./stockGroupModel");
+const StockCategory = require("./stockCategoryModel");
+const Unit = require("./unitModel");
+const Godown = require("./godownModel");
+const CostCentre = require("./costCentreModel");
+const CostCategory = require("./costCategoryModel");
+const VoucherType = require("./voucherTypeModel");
+const Currency = require("./currencyModel");
+const { buildMirrorSchema, buildMirrorModel } = require("./mirrorModel.factory");
 
 /**
  * Mirror collections, one per canonical domain.
@@ -10,33 +22,38 @@ const SyncState = require("./SyncState");
  * the live extraction path already uses.
  */
 const DOMAIN_MODELS = {
-  ledgers: buildMirrorModel("Ledger", "Ledger", "ledgers"),
-  groups: buildMirrorModel("Group", "Group", "groups"),
-  stockItems: buildMirrorModel("StockItem", "StockItem", "stockitems"),
-  stockGroups: buildMirrorModel("StockGroup", "StockGroup", "stockgroups"),
-  stockCategories: buildMirrorModel("StockCategory", "StockCategory", "stockcategories"),
-  units: buildMirrorModel("Unit", "Unit", "units"),
-  godowns: buildMirrorModel("Godown", "Godown", "godowns"),
-  costCentres: buildMirrorModel("CostCentre", "CostCentre", "costcentres"),
-  costCategories: buildMirrorModel("CostCategory", "CostCategory", "costcategories"),
-  voucherTypes: buildMirrorModel("VoucherType", "VoucherType", "vouchertypes"),
-  currencies: buildMirrorModel("Currency", "Currency", "currencies")
+  ledgers: Ledger,
+  groups: Group,
+  stockItems: StockItem,
+  stockGroups: StockGroup,
+  stockCategories: StockCategory,
+  units: Unit,
+  godowns: Godown,
+  costCentres: CostCentre,
+  costCategories: CostCategory,
+  voucherTypes: VoucherType,
+  currencies: Currency
 };
 
-// Vouchers are transactions rather than masters: same envelope, but queried by
-// date, so they get their own model and date index.
-const Voucher = buildMirrorModel("Voucher", "Voucher", "vouchers");
-// Index the fields the canonical voucher actually carries: `voucherDate` and
-// `sourceVoucherNumber`. The previous `date`/`voucherNumber` pair existed on no
-// voucher document, so the register's date-window read was unindexed as well as
-// unmatched.
-Voucher.schema.index({ companyId: 1, voucherDate: 1 });
-Voucher.schema.index({ companyId: 1, sourceVoucherNumber: 1 });
+const DOMAIN_NAMES = Object.keys(DOMAIN_MODELS);
 
 module.exports = {
   Company,
   SyncState,
   Voucher,
+  Ledger,
+  Group,
+  StockItem,
+  StockGroup,
+  StockCategory,
+  Unit,
+  Godown,
+  CostCentre,
+  CostCategory,
+  VoucherType,
+  Currency,
   DOMAIN_MODELS,
-  DOMAIN_NAMES: Object.keys(DOMAIN_MODELS)
+  DOMAIN_NAMES,
+  buildMirrorSchema,
+  buildMirrorModel
 };

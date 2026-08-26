@@ -49,6 +49,8 @@ const {
   reconcileVoucherWithTally,
   generateReconciliationReport
 } = require("../integrations/tally/canonical/accountingAnalysis.engine");
+const { buildFactSales } = require("../integrations/tally/sales/factSales.builder");
+const { generateMisReport5 } = require("../integrations/tally/sales/misReport5/misReport5.engine");
 
 /**
  * Run one read-only extraction for a company and normalize the collection.
@@ -478,10 +480,16 @@ async function getSalesAnalysis(company, options = {}) {
   });
   if (!register.available) return { available: false, reason: register.reason };
 
-  const partyOf = await getPartyProfileResolver(company);
-  const voucherTypeResolver = await getVoucherTypeResolver(company);
+  const [ledgerRes, itemRes, groupRes, ccRes, partyOf, voucherTypeResolver] = await Promise.all([
+    getDomain(company, "ledgers"),
+    getDomain(company, "stockItems"),
+    getDomain(company, "stockGroups"),
+    getDomain(company, "costCentres"),
+    getPartyProfileResolver(company),
+    getVoucherTypeResolver(company)
+  ]);
 
-  return runAccountingAnalysis({
+  const analysis = runAccountingAnalysis({
     vouchers: register.records,
     company,
     direction: "SALES",
@@ -491,6 +499,29 @@ async function getSalesAnalysis(company, options = {}) {
     fetchedAt: register.fetchedAt,
     syncedAt: register.syncedAt
   });
+
+  // Attach the 16-Filter Owner-POV Analytical Suite directly into Sales Analysis payload
+  try {
+    const factResult = buildFactSales({
+      companyId: company.companyId,
+      companyGuid: company.guid || null,
+      salesVouchers: register.records || [],
+      ledgers: (ledgerRes && ledgerRes.records) || [],
+      stockItems: (itemRes && itemRes.records) || [],
+      stockGroups: (groupRes && groupRes.records) || [],
+      costCentres: (ccRes && ccRes.records) || [],
+      costCentresEnabled: ccRes && ccRes.available
+    });
+
+    analysis.misReport5 = generateMisReport5({
+      factSalesRows: factResult.rows || [],
+      options
+    });
+  } catch (e) {
+    analysis.misReport5 = null;
+  }
+
+  return analysis;
 }
 
 /**
@@ -545,6 +576,44 @@ async function getReconciliationReport(company, options = {}) {
     voucherTypeResolver,
     partyOf
   });
+}
+
+/**
+ * Owner-POV 16-Filter MIS Report #5 (SubCategory x City x Month).
+ */
+async function getMisReport5(company, options = {}) {
+  const [voucherRes, ledgerRes, itemRes, groupRes, ccRes] = await Promise.all([
+    getVouchers(company, { fromDate: options.fromDate, toDate: options.toDate, includeEntries: true }),
+    getDomain(company, "ledgers"),
+    getDomain(company, "stockItems"),
+    getDomain(company, "stockGroups"),
+    getDomain(company, "costCentres")
+  ]);
+
+  if (!voucherRes.available) return { available: false, reason: voucherRes.reason };
+
+  const factResult = buildFactSales({
+    companyId: company.companyId,
+    companyGuid: company.guid || null,
+    salesVouchers: voucherRes.records || [],
+    ledgers: (ledgerRes && ledgerRes.records) || [],
+    stockItems: (itemRes && itemRes.records) || [],
+    stockGroups: (groupRes && groupRes.records) || [],
+    costCentres: (ccRes && ccRes.records) || [],
+    costCentresEnabled: ccRes && ccRes.available
+  });
+
+  const report = generateMisReport5({
+    factSalesRows: factResult.rows || [],
+    options
+  });
+
+  return {
+    available: true,
+    companyId: company.companyId,
+    companyName: company.name,
+    ...report
+  };
 }
 
 /**
@@ -644,6 +713,7 @@ module.exports = {
   getSalesAnalysis,
   getPurchaseAnalysis,
   getReconciliationReport,
+  getMisReport5,
   getVoucherTypeResolver,
   getParties,
   getOverview,

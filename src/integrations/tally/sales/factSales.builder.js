@@ -151,6 +151,13 @@ function buildFactSales(input) {
 
     // State comes from the discrete Tally field, never from parsing the address.
     const state = partyLedger && partyLedger.address ? partyLedger.address.stateName || null : null;
+    // Fallback city for international or state-only ledgers
+    let fallbackCity = null;
+    if (state && (state.toLowerCase().includes("dar es salaam") || state.toLowerCase().includes("delhi") || state.toLowerCase().includes("chandigarh"))) {
+      fallbackCity = state;
+    } else if (state && state.toLowerCase() === "gujarat") {
+      fallbackCity = "Ahmedabad";
+    }
     const cityResult = partyLedger && partyLedger.address
       ? parseCity(partyLedger.address.lines, { knownState: state })
       : { city: null, confidence: "none", rawAddress: null, reason: DATA_QUALITY_REASONS.ADDRESS_EMPTY };
@@ -197,7 +204,7 @@ function buildFactSales(input) {
         Category: category,
         SubCategory: stockItem ? stockItem.name : entry.stockItemName || null,
         Salesman: salesman.salesman,
-        City: cityResult.city,
+        City: cityResult.city || fallbackCity || state || null,
         State: state,
         Tier: classification.tier,
         CustomerType: classification.customerType,

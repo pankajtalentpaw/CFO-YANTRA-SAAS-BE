@@ -3,33 +3,28 @@ const { recordChecksum } = require("../../../utils/checksum");
 /**
  * EXP-08: Incremental Sync & Change Capture Engine
  * Manages AlterID checkpoints, change detection, mutation testing, and idempotent replay.
+ * Function-based architecture.
  */
 
-class IncrementalSyncCursor {
-  constructor(initialAlterId = 0) {
-    this.lastCheckpointAlterId = Number(initialAlterId) || 0;
-    this.history = [];
-    this.tombstones = new Map();
-  }
+function createIncrementalSyncCursor(initialAlterId = 0) {
+  let lastCheckpointAlterId = Number(initialAlterId) || 0;
+  const history = [];
+  const tombstones = new Map();
 
-  /**
-   * Filter and update cursor based on new incremental batches
-   */
-  processBatch(records = []) {
-    let maxAlterId = this.lastCheckpointAlterId;
-    const added = [];
+  function processBatch(records = []) {
+    let maxAlterId = lastCheckpointAlterId;
     const updated = [];
 
     records.forEach((rec) => {
       const recAlterId = Number(rec.alterId || (rec.header && rec.header.alterId) || 0);
-      if (recAlterId > this.lastCheckpointAlterId) {
+      if (recAlterId > lastCheckpointAlterId) {
         if (recAlterId > maxAlterId) maxAlterId = recAlterId;
         updated.push(rec);
       }
     });
 
-    const previousCheckpoint = this.lastCheckpointAlterId;
-    this.lastCheckpointAlterId = maxAlterId;
+    const previousCheckpoint = lastCheckpointAlterId;
+    lastCheckpointAlterId = maxAlterId;
 
     const event = {
       timestamp: new Date().toISOString(),
@@ -37,7 +32,7 @@ class IncrementalSyncCursor {
       newCheckpoint: maxAlterId,
       recordsProcessed: updated.length
     };
-    this.history.push(event);
+    history.push(event);
 
     return {
       previousCheckpoint,
@@ -47,27 +42,55 @@ class IncrementalSyncCursor {
     };
   }
 
-  /**
-   * Record deletion tombstone
-   */
-  recordTombstone(objectId, reason = "DELETED_AT_SOURCE") {
-    this.tombstones.set(objectId, {
+  function recordTombstone(objectId, reason = "DELETED_AT_SOURCE") {
+    tombstones.set(objectId, {
       objectId,
       deletedAt: new Date().toISOString(),
       reason
     });
   }
 
-  getTombstones() {
-    return Array.from(this.tombstones.values());
+  function getTombstones() {
+    return Array.from(tombstones.values());
   }
+
+  const cursorObj = {
+    get lastCheckpointAlterId() {
+      return lastCheckpointAlterId;
+    },
+    set lastCheckpointAlterId(val) {
+      lastCheckpointAlterId = Number(val) || 0;
+    },
+    history,
+    tombstones,
+    processBatch,
+    recordTombstone,
+    getTombstones
+  };
+
+  return cursorObj;
+}
+
+// Function-based constructor for backwards compatibility with `new IncrementalSyncCursor(initial)`
+function IncrementalSyncCursor(initialAlterId = 0) {
+  const instance = createIncrementalSyncCursor(initialAlterId);
+  Object.assign(this, instance);
+  this.processBatch = instance.processBatch;
+  this.recordTombstone = instance.recordTombstone;
+  this.getTombstones = instance.getTombstones;
+  Object.defineProperty(this, "lastCheckpointAlterId", {
+    get: () => instance.lastCheckpointAlterId,
+    set: (v) => { instance.lastCheckpointAlterId = v; },
+    enumerable: true,
+    configurable: true
+  });
 }
 
 /**
  * Run Mutation Chaos Test Simulator (Validates idempotency across simulated ALTER, BACKDATE, CANCEL)
  */
 function runMutationChaosTest() {
-  const cursor = new IncrementalSyncCursor(100);
+  const cursor = createIncrementalSyncCursor(100);
 
   const batch1 = [
     { sourceObjectId: "v1", alterId: 105, amount: "5000.00", isCancelled: false },
@@ -97,6 +120,7 @@ function runMutationChaosTest() {
 }
 
 module.exports = {
+  createIncrementalSyncCursor,
   IncrementalSyncCursor,
   runMutationChaosTest
 };
