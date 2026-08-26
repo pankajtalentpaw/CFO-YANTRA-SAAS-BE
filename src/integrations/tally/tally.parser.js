@@ -63,9 +63,29 @@ function extractValue(val) {
 
 /** Field aliases actually observed across Tally XML company collections. */
 const COMPANY_NAME_KEYS = ["NAME", "Name", "name", "@_NAME", "COMPANYNAME", "CompanyName"];
+const COMPANY_FORMAL_NAME_KEYS = ["FORMALNAME", "FormalName", "formalName", "LEGALNAME", "LegalName"];
 const COMPANY_GUID_KEYS = ["GUID", "Guid", "guid", "@_GUID"];
 const COMPANY_MASTERID_KEYS = ["MASTERID", "MasterId", "masterId", "@_MASTERID", "REMOTECMPID", "@_REMOTECMPID"];
-const COMPANY_START_KEYS = ["STARTINGFROM", "StartingFrom", "startingFrom", "BOOKSFROM", "BooksFrom", "booksFrom"];
+const COMPANY_ALTERID_KEYS = ["ALTERID", "AlterId", "alterId", "@_ALTERID"];
+const COMPANY_START_KEYS = ["STARTINGFROM", "StartingFrom", "startingFrom"];
+const COMPANY_BOOKS_KEYS = ["BOOKSFROM", "BooksFrom", "booksFrom"];
+const COMPANY_CURRENCY_KEYS = ["BASECURRENCY", "BaseCurrency", "baseCurrency", "CURRENCY", "Currency"];
+const COMPANY_COUNTRY_KEYS = ["COUNTRYNAME", "CountryName", "countryName", "COUNTRY", "Country"];
+const COMPANY_STATE_KEYS = ["STATENAME", "StateName", "stateName", "STATE", "State"];
+const COMPANY_PINCODE_KEYS = ["PINCODE", "PinCode", "pinCode"];
+const COMPANY_EMAIL_KEYS = ["EMAIL", "EMail", "email", "eMail"];
+const COMPANY_PHONE_KEYS = ["PHONENUMBER", "PhoneNumber", "phoneNumber", "PHONE", "Phone"];
+const COMPANY_MOBILE_KEYS = ["MOBILENO", "MobileNo", "mobileNo", "MOBILE", "Mobile"];
+const COMPANY_GSTIN_KEYS = ["GSTREGNO", "GstRegNo", "gstRegNo", "GSTIN", "PartyGSTIN", "GSTREGNUMBER", "GstRegNumber", "gstregnumber", "TAXREGISTRATION"];
+const COMPANY_PAN_KEYS = ["PANCARDNO", "PanCardNo", "panCardNo", "PAN", "Pan", "INCOMETAXNUMBER", "IncomeTaxNumber", "incometaxnumber", "ITNO", "ItNo"];
+const COMPANY_CIN_KEYS = ["CINNO", "CinNo", "cinNo", "CIN", "Cin"];
+
+function parseBoolean(val) {
+  if (val === undefined || val === null) return false;
+  const raw = val && typeof val === "object" && val["#text"] !== undefined ? val["#text"] : val;
+  const s = String(raw).trim().toLowerCase();
+  return s === "yes" || s === "true" || s === "1" || s === "on";
+}
 
 /**
  * Read the first present alias from a parsed XML node, flattening text nodes.
@@ -130,6 +150,7 @@ function toCompanyInfo(node) {
       companyId: deriveCompanyId(null, null, name),
       name,
       companyName: name,
+      legalName: name,
       raw: node
     };
   }
@@ -139,22 +160,78 @@ function toCompanyInfo(node) {
   const name = pickField(node, COMPANY_NAME_KEYS);
   if (!name) return null;
 
+  const formalName = pickField(node, COMPANY_FORMAL_NAME_KEYS);
   const guid = pickField(node, COMPANY_GUID_KEYS);
   const masterId = pickField(node, COMPANY_MASTERID_KEYS);
+  const alterId = pickField(node, COMPANY_ALTERID_KEYS);
   const startingAt = normalizeCompanyDate(pickField(node, COMPANY_START_KEYS));
+  const booksFrom = normalizeCompanyDate(pickField(node, COMPANY_BOOKS_KEYS));
+  const baseCurrency = pickField(node, COMPANY_CURRENCY_KEYS) || "INR";
+  const country = pickField(node, COMPANY_COUNTRY_KEYS) || "India";
+  const state = pickField(node, COMPANY_STATE_KEYS);
+  const pinCode = pickField(node, COMPANY_PINCODE_KEYS);
+  const email = pickField(node, COMPANY_EMAIL_KEYS);
+  const phone = pickField(node, COMPANY_PHONE_KEYS);
+  const mobile = pickField(node, COMPANY_MOBILE_KEYS);
+  const gstin = pickField(node, COMPANY_GSTIN_KEYS);
+  let pan = pickField(node, COMPANY_PAN_KEYS);
+  const cin = pickField(node, COMPANY_CIN_KEYS);
+
+  const features = {
+    billWise: parseBoolean(node.ISBILLWISEON || node.IsBillWiseOn),
+    costCentres: parseBoolean(node.ISCOSTCENTRESON || node.IsCostCentresOn),
+    inventory: parseBoolean(node.ISINVENTORYON !== undefined ? node.ISINVENTORYON : node.IsInventoryOn !== undefined ? node.IsInventoryOn : true),
+    multiCurrency: parseBoolean(node.ISMULTICURRENCYON || node.IsMultiCurrencyOn),
+    payroll: parseBoolean(node.ISPAYROLLON || node.IsPayrollOn),
+    gstApplicable: parseBoolean(node.ISGSTAPPLICABLE || node.IsGstApplicable || gstin),
+    tdsApplicable: parseBoolean(node.ISTDSAPPLICABLE || node.IsTdsApplicable),
+    tcsApplicable: parseBoolean(node.ISTCSAPPLICABLE || node.IsTcsApplicable),
+    batchEnabled: parseBoolean(node.ISBATCHON || node.IsBatchOn),
+    godownEnabled: parseBoolean(node.ISGODOWNON || node.IsGodownOn),
+    bomEnabled: parseBoolean(node.ISBOMON || node.IsBOMOn)
+  };
 
   /** @type {TallyCompanyInfo} */
   const company = {
     companyId: deriveCompanyId(guid, masterId, name),
     name,
     companyName: name,
+    legalName: formalName || name,
     raw: node
   };
 
-  // Optional fields are only attached when Tally actually returned them.
   if (guid) company.guid = guid;
-  if (masterId) company.masterId = masterId;
-  if (startingAt) company.startingAt = startingAt;
+  if (masterId !== null && masterId !== undefined && masterId !== "") company.masterId = masterId;
+  if (alterId !== null && alterId !== undefined && alterId !== "") company.alterId = alterId;
+  if (startingAt) {
+    company.startingAt = startingAt;
+    company.startingFrom = startingAt;
+  }
+  if (booksFrom) company.booksFrom = booksFrom;
+  if (formalName) company.formalName = formalName;
+  if (baseCurrency) company.baseCurrency = baseCurrency;
+  if (country) company.country = country;
+  if (state) company.state = state;
+  if (pinCode) company.pinCode = pinCode;
+  if (email) company.email = email;
+  if (phone) company.phone = phone;
+  if (mobile) company.mobile = mobile;
+  if (gstin) {
+    company.gstin = gstin;
+    company.gstRegNo = gstin;
+    if (!pan && gstin.length === 15) {
+      pan = gstin.substring(2, 12);
+    }
+  }
+  if (pan) {
+    company.pan = pan;
+    company.panCardNo = pan;
+  }
+  if (cin) {
+    company.cin = cin;
+    company.cinNo = cin;
+  }
+  if (features) company.features = features;
 
   return company;
 }

@@ -9,9 +9,42 @@
 
 const { sendXmlRequest } = require("../integrations/tally/transports/xml.transport");
 const { parseCompanies } = require("../integrations/tally/tally.parser");
-const { buildCompanyListRequest } = require("../integrations/tally/tally.requests");
+const { buildCompanyListRequest, buildEnvelope } = require("../integrations/tally/tally.requests");
 const { ingestionError, classifyTransportFailure, INGESTION_ERROR_CODES } = require("../integrations/tally/sales/factSales.errors");
 const mirror = require("./sync/mirror.service");
+
+const GSTIN_REGEX = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i;
+
+/**
+ * Query company-specific tax units to extract active GSTIN and statutory registrations
+ */
+async function extractCompanyTaxRegistration(companyName) {
+  if (!companyName) return null;
+  const cacheKey = `__taxreg_${companyName}__`;
+  const hit = cache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 600_000) return hit.value;
+
+  try {
+    const xml = buildEnvelope(
+      "TaxUnitColl",
+      "TaxUnit",
+      ["Name", "GSTREGNUMBER", "TAXREGISTRATION", "USEDFOR", "TAXTYPE"],
+      companyName
+    );
+    const transportResult = await sendXmlRequest({ xml });
+    if (!transportResult.success || !transportResult.rawResponse) return null;
+
+    const raw = transportResult.rawResponse;
+    const match = raw.match(GSTIN_REGEX);
+    const gstin = match ? match[1].trim().toUpperCase() : null;
+    const pan = gstin && gstin.length === 15 ? gstin.substring(2, 12) : null;
+    const result = { gstin, pan };
+    cache.set(cacheKey, { at: Date.now(), value: result });
+    return result;
+  } catch (err) {
+    return null;
+  }
+}
 
 /** Short-lived cache so opening a company page does not re-query Tally per tab. */
 const DEFAULT_TTL_MS = 30_000;
@@ -76,7 +109,7 @@ function invalidate(companyId) {
  *   safety gate: a stale list must never authorize a request against a company
  *   that has since been closed.
  */
-async function listCompanies({ fresh = false, allowStale = false, force = false } = {}) {
+async function listCompanies({ fresh = false, allowStale = false, force = false, enrichTax = false } = {}) {
   const load = async () => {
     const transportResult = await sendXmlRequest({ xml: buildCompanyListRequest(), force });
     if (!transportResult.success) {
@@ -101,7 +134,30 @@ async function listCompanies({ fresh = false, allowStale = false, force = false 
         })
       };
     }
-    return { success: true, companies: parseCompanies(transportResult.parsedResponse) };
+    const companies = parseCompanies(transportResult.parsedResponse);
+    if (enrichTax) {
+      await Promise.all(
+        companies.map(async (c) => {
+          if (!c.gstin) {
+            const tax = await extractCompanyTaxRegistration(c.name);
+            if (tax && tax.gstin) {
+              c.gstin = tax.gstin;
+              c.gstRegNo = tax.gstin;
+              if (!c.pan && tax.pan) {
+                c.pan = tax.pan;
+                c.panCardNo = tax.pan;
+              }
+              if (c.features) c.features.gstApplicable = true;
+            }
+          }
+          if (!c.pan && c.gstin && c.gstin.length === 15) {
+            c.pan = c.gstin.substring(2, 12);
+            c.panCardNo = c.pan;
+          }
+        })
+      );
+    }
+    return { success: true, companies };
   };
 
   // A forced retry must not be answered from the cache it is trying to refresh.

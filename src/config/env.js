@@ -8,7 +8,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   TALLY_HOST: z.string().min(1).default("127.0.0.1"),
   TALLY_PORT: z.coerce.number().int().min(1).max(65535).default(9000),
-  TALLY_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(10000),
+  TALLY_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(30000),
   // Health probes must answer well inside the frontend's patience, so they get
   // their own budget rather than the full data-extraction timeout.
   TALLY_PROBE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(4000),
@@ -31,7 +31,7 @@ const envSchema = z.object({
   // Vouchers are the heavy part of a company. Ledger/inventory entries are
   // opt-in because pulling them holds TallyPrime for much longer per tick.
   SYNC_VOUCHERS: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
-  SYNC_VOUCHER_ENTRIES: z.enum(["true", "false"]).default("false").transform((v) => v === "true")
+  SYNC_VOUCHER_ENTRIES: z.enum(["true", "false"]).default("true").transform((v) => v === "true")
 });
 
 let parsedEnv;

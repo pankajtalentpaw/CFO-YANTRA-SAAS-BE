@@ -132,7 +132,14 @@ function buildFactSales(input) {
 
   for (const voucher of salesVouchers) {
     // Company isolation: a voucher from another company is never joined here.
-    if (!voucher || voucher.companyId !== companyId) continue;
+    const vCompId = voucher.companyId || voucher.sourceCompanyId || companyId;
+    if (!voucher || vCompId !== companyId) continue;
+
+    const vType = String(voucher.voucherTypeName || voucher.voucherType || "").trim().toLowerCase();
+    if (vType && !vType.includes("sales") && !vType.includes("credit note") && !vType.includes("delivery") && !vType.includes("tax invoice")) {
+      continue;
+    }
+
     if (voucher.isCancelled || voucher.isOptional) {
       rejected.push({ sourceVoucherId: voucher.sourceVoucherId, reason: "VOUCHER_CANCELLED_OR_OPTIONAL" });
       continue;

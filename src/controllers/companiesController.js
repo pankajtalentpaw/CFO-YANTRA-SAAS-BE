@@ -107,7 +107,7 @@ async function getCompanies(req, res) {
     // Display only: a momentary Tally stall should not blank the company list.
     // ?force=1 comes from the Refresh button and retries even during a cooldown.
     const force = req.query.force === "1" || req.query.force === "true";
-    const discovery = await listCompanies({ allowStale: !force, force });
+    const discovery = await listCompanies({ allowStale: !force, force, enrichTax: true });
     if (!discovery.success) {
       return res.status(502).json({ success: false, companies: [], ...discovery.error });
     }
@@ -121,8 +121,24 @@ async function getCompanies(req, res) {
         companyId: c.companyId,
         companyGuid: c.guid || null,
         companyName: c.name,
-        startingAt: c.startingAt || null,
+        legalName: c.legalName || c.formalName || c.name,
+        formalName: c.formalName || c.name,
+        startingAt: c.startingAt || c.startingFrom || null,
+        startingFrom: c.startingFrom || c.startingAt || null,
+        booksFrom: c.booksFrom || c.startingAt || null,
         masterId: c.masterId || null,
+        alterId: c.alterId || null,
+        baseCurrency: c.baseCurrency || "INR",
+        country: c.country || "India",
+        state: c.state || null,
+        pinCode: c.pinCode || null,
+        email: c.email || null,
+        phone: c.phone || null,
+        mobile: c.mobile || null,
+        gstin: c.gstin || null,
+        pan: c.pan || null,
+        cin: c.cin || null,
+        features: c.features || {},
         tallyStatus: "connected"
       }))
     });
@@ -139,8 +155,22 @@ const getCompany = withCompany(async (req, res, company) => {
       companyId: company.companyId,
       companyGuid: company.guid || null,
       companyName: company.name,
-      startingAt: company.startingAt || null,
-      masterId: company.masterId || null
+      legalName: company.legalName || company.formalName || company.name,
+      startingAt: company.startingAt || company.startingFrom || null,
+      booksFrom: company.booksFrom || company.startingAt || null,
+      masterId: company.masterId || null,
+      alterId: company.alterId || null,
+      baseCurrency: company.baseCurrency || "INR",
+      country: company.country || "India",
+      state: company.state || null,
+      pinCode: company.pinCode || null,
+      email: company.email || null,
+      phone: company.phone || null,
+      mobile: company.mobile || null,
+      gstin: company.gstin || null,
+      pan: company.pan || null,
+      cin: company.cin || null,
+      features: company.features || {}
     },
     capabilities
   });

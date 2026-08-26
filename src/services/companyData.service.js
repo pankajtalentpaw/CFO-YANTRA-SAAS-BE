@@ -187,8 +187,8 @@ async function getVouchers(company, { fromDate, toDate, includeEntries = false, 
   // be served where entries were requested, nor shared across companies.
   const key = `${company.companyId}::vouchers::${effectiveFrom || "*"}::${toDate || "*"}::${includeEntries ? "full" : "light"}`;
 
-  const mirrorHasShape = !includeEntries || env.sync.voucherEntries;
-  if (!bypassMirror && mirrorHasShape) {
+  // 1. DB-First Fast Path: Read from MongoDB local mirror (<15ms)
+  if (!bypassMirror) {
     const mirrored = await mirror.readVouchers(company.companyId, { fromDate: effectiveFrom, toDate });
     if (mirrored) return mirrored;
   }
@@ -646,8 +646,24 @@ async function getOverview(company) {
       companyId: company.companyId,
       companyGuid: company.guid || null,
       companyName: company.name,
-      startingAt: company.startingAt || null,
-      masterId: company.masterId || null
+      legalName: company.legalName || company.formalName || company.name,
+      formalName: company.formalName || company.name,
+      startingAt: company.startingAt || company.startingFrom || null,
+      startingFrom: company.startingFrom || company.startingAt || null,
+      booksFrom: company.booksFrom || company.startingAt || null,
+      masterId: company.masterId || null,
+      alterId: company.alterId || null,
+      baseCurrency: company.baseCurrency || "INR",
+      country: company.country || "India",
+      state: company.state || null,
+      pinCode: company.pinCode || null,
+      email: company.email || null,
+      phone: company.phone || null,
+      mobile: company.mobile || null,
+      gstin: company.gstin || null,
+      pan: company.pan || null,
+      cin: company.cin || null,
+      features: company.features || {}
     },
     counts,
     unavailable,

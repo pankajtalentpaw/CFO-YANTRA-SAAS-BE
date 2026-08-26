@@ -99,11 +99,21 @@ function buildCompanyProbeRequest(exportFormat = "XML") {
 function buildCompanyListRequest() {
   return buildEnvelope("CompanyCollection", "Company", [], null, {}, [
     "Name",
+    "FormalName",
     "Guid",
     "StartingFrom",
     "BooksFrom",
     "MasterId",
-    "AlterId"
+    "AlterId",
+    "CountryName",
+    "StateName",
+    "PinCode",
+    "EMail",
+    "PhoneNumber",
+    "MobileNo",
+    "GstRegNo",
+    "PanCardNo",
+    "CinNo"
   ]);
 }
 
