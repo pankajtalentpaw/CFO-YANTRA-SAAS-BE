@@ -136,15 +136,87 @@ function evaluateFilter4_SubCategoryContributionShare(cube) {
 }
 
 /**
- * Filter 9: Concentration Risk (HHI) by SubCategory
- * Answers: Which SubCategory is dangerously dependent on just one Month?
- * Computes HHI = sum((monthly_revenue / total_revenue)^2)
+ * Filter 9: Concentration Risk (HHI Index)
+ * Answers: Is my business dangerously dependent on a few Products, Cities, or Months?
+ * Computes:
+ * 1. Company-wide Product HHI = sum((Product Revenue / Total Revenue)^2)
+ * 2. Company-wide City HHI = sum((City Revenue / Total Revenue)^2)
+ * 3. SubCategory-level Month HHI = sum((Monthly Revenue / SubCat Revenue)^2)
  */
 function evaluateFilter9_ConcentrationRiskHHI(cube) {
-  const { subCategories, months, subCategoryMonthMatrix, subCategoryTotals } = cube;
+  const { subCategories, cities, months, subCategoryMonthMatrix, subCategoryTotals, cityTotals, totalRevenue } = cube;
   let highRiskCount = 0;
   let moderateRiskCount = 0;
 
+  // 1. Company-Wide Product HHI
+  let productHhiSum = new Decimal(0);
+  const productShares = [];
+  if (totalRevenue.isPositive()) {
+    for (const subCat of subCategories) {
+      const amt = subCategoryTotals.get(subCat) || new Decimal(0);
+      const share = amt.dividedBy(totalRevenue);
+      productHhiSum = productHhiSum.plus(share.times(share));
+      productShares.push({
+        subCategory: subCat,
+        revenue: toDecimalString(amt),
+        sharePercent: share.times(100).toDecimalPlaces(2).toNumber()
+      });
+    }
+  }
+  const productHhiValue = Number(productHhiSum.toDecimalPlaces(4).toNumber());
+  let productRiskLevel = "DIVERSIFIED";
+  if (subCategories.length === 1) {
+    productRiskLevel = "STRUCTURAL_MONOPOLY";
+  } else if (productHhiValue >= THRESHOLDS.HHI_HIGH_RISK_THRESHOLD) {
+    productRiskLevel = "HIGH_RISK";
+  } else if (productHhiValue >= THRESHOLDS.HHI_MODERATE_RISK_THRESHOLD) {
+    productRiskLevel = "MODERATE_RISK";
+  }
+
+  const productHhi = {
+    hhi: productHhiValue,
+    riskLevel: productRiskLevel,
+    isHighRisk: productHhiValue >= THRESHOLDS.HHI_HIGH_RISK_THRESHOLD,
+    totalProducts: subCategories.length,
+    shares: productShares,
+    label: subCategories.length === 1 ? "Structural Monopoly (Single Entity)" : undefined
+  };
+
+  // 2. Company-Wide City HHI
+  let cityHhiSum = new Decimal(0);
+  const cityShares = [];
+  if (totalRevenue.isPositive()) {
+    for (const city of cities) {
+      const amt = cityTotals.get(city) || new Decimal(0);
+      const share = amt.dividedBy(totalRevenue);
+      cityHhiSum = cityHhiSum.plus(share.times(share));
+      cityShares.push({
+        city,
+        revenue: toDecimalString(amt),
+        sharePercent: share.times(100).toDecimalPlaces(2).toNumber()
+      });
+    }
+  }
+  const cityHhiValue = Number(cityHhiSum.toDecimalPlaces(4).toNumber());
+  let cityRiskLevel = "DIVERSIFIED";
+  if (cities.length === 1) {
+    cityRiskLevel = "STRUCTURAL_MONOPOLY";
+  } else if (cityHhiValue >= THRESHOLDS.HHI_HIGH_RISK_THRESHOLD) {
+    cityRiskLevel = "HIGH_RISK";
+  } else if (cityHhiValue >= THRESHOLDS.HHI_MODERATE_RISK_THRESHOLD) {
+    cityRiskLevel = "MODERATE_RISK";
+  }
+
+  const cityHhi = {
+    hhi: cityHhiValue,
+    riskLevel: cityRiskLevel,
+    isHighRisk: cityHhiValue >= THRESHOLDS.HHI_HIGH_RISK_THRESHOLD,
+    totalCities: cities.length,
+    shares: cityShares,
+    label: cities.length === 1 ? "Structural Monopoly (Single Entity)" : undefined
+  };
+
+  // 3. SubCategory-level Monthly Concentration HHI
   const results = subCategories.map((subCat) => {
     const total = subCategoryTotals.get(subCat) || new Decimal(0);
     if (total.isZero() || months.length === 0) {
@@ -197,13 +269,15 @@ function evaluateFilter9_ConcentrationRiskHHI(cube) {
 
   return {
     filterId: 9,
-    filterName: "Concentration Risk (HHI) by SubCategory",
-    ownerQuestion: "Which SubCategory is dangerously dependent on just one Month?",
+    filterName: "Concentration Risk (HHI Index)",
+    ownerQuestion: "Is my business dangerously dependent on one or two products, cities, or months?",
     type: "Risk",
     threshold: `HHI >= ${THRESHOLDS.HHI_HIGH_RISK_THRESHOLD} = High Risk`,
-    summary: `SubCategories at High Risk (HHI >= ${THRESHOLDS.HHI_HIGH_RISK_THRESHOLD}): ${highRiskCount} (Moderate: ${moderateRiskCount})`,
+    summary: `Product HHI: ${productHhiValue.toFixed(4)} (${productRiskLevel}), City HHI: ${cityHhiValue.toFixed(4)} (${cityRiskLevel}), Monthly High Risk SKUs: ${highRiskCount}`,
     highRiskCount,
     moderateRiskCount,
+    productHhi,
+    cityHhi,
     data: results
   };
 }

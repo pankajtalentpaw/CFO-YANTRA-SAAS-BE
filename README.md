@@ -4,7 +4,7 @@
 [![Express](https://img.shields.io/badge/Express-4.x-black.svg)](https://expressjs.com/)
 [![MongoDB](https://img.shields.io/badge/MongoDB-Local%20Mirror-brightgreen.svg)](https://www.mongodb.com/)
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o%20Mini%20%2F%204o-blue.svg)](https://openai.com/)
-[![Tests](https://img.shields.io/badge/Tests-339%20Passed%20%2F%2024%20Suites-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-341%20Passed%20%2F%2024%20Suites-brightgreen.svg)]()
 [![Architecture](https://img.shields.io/badge/Architecture-Function--Based%20Modular-orange.svg)]()
 
 > **Master Technical & Project Management Documentation**  
@@ -255,26 +255,39 @@ $$\Delta_{\text{Reconciliation}} = \left| \text{Header Total} - \sum_{i=1}^n \te
 
 ---
 
-### MIS Report 5: The 16 Strategic Decision Matrix Filters
+### MIS Report 5: The 18 Analytical Lenses (Owner-POV Analytics Suite)
 
-| Filter ID | Filter Name | Mathematical Formula / Algorithm | Strategic CFO Insight |
-| :--- | :--- | :--- | :--- |
-| **Filter 1** | **SubCategory Concentration** | $\text{Share}_{\text{Prod}} = \frac{\text{Sales}_{\text{Product, City}}}{\text{Total Sales}_{\text{City}}} \times 100$ | Identifies single-product dominance in specific regional markets. |
-| **Filter 2** | **City Concentration** | $\text{Share}_{\text{City}} = \frac{\text{Sales}_{\text{Product, City}}}{\text{Total Sales}_{\text{Product}}} \times 100$ | Detects reliance of a product on a single geographic hub. |
-| **Filter 3** | **HHI Concentration** | $\text{HHI} = \sum_{i=1}^N \left(\frac{S_i}{S_{\text{total}}}\right)^2 \quad (\text{Flag if } \text{HHI} \ge 0.80)$ | Measures market concentration risk ($0.0 \le \text{HHI} \le 1.0$). |
-| **Filter 4** | **Seasonality Volatility** | $\text{Seasonality Index} = \frac{\text{Sales}_{\text{Month}}}{\bar{S}_{\text{Monthly}}}, \quad \text{CV} = \frac{\sigma}{\mu}$ | Highlights seasonal billing spikes vs structural run-rate demand. |
-| **Filter 5** | **Gross Margin Spread** | $\text{Margin Spread} \% = \frac{\text{Selling Price} - \text{Unit Cost}}{\text{Selling Price}} \times 100$ | Identifies margin erosion across customer categories. |
-| **Filter 6** | **Pareto 80/20 Rule** | Cumulative Revenue curve ranking: Top $20\%$ combos driving $80\%$ turnover. | Guides working capital reallocation from tail SKUs to top lines. |
-| **Filter 7** | **Decline Streak & COI** | **Linear Regression Slope** $m < 0$ for $\ge 3$ consecutive months. | Quantifies recoverable cash bleeding from declining markets. |
-| **Filter 8** | **Cross-Market Whitespace** | Matrix delta: $\text{Product } X \text{ sold in City } A \text{ but } 0 \text{ in City } B$. | Direct roadmap for regional sales expansion. |
-| **Filter 9** | **Top Combo Turnover** | $\text{Combo Share} = \frac{\text{Turnover}_{\text{Product } \times \text{ City}}}{\text{Total Enterprise Revenue}} \times 100$ | Highlights vital core revenue pillars. |
-| **Filter 10** | **Product Matrix A vs B** | Correlation & divergence: $\Delta \% = \frac{\text{Sales}_A - \text{Sales}_B}{\text{Sales}_A + \text{Sales}_B} \times 100$ | Compares product substitution and cannibalization. |
-| **Filter 11** | **Month Divergence (MoM)** | $\text{MoM Growth} \% = \left(\frac{\text{Sales}_{M2} - \text{Sales}_{M1}}{\text{Sales}_{M1}}\right) \times 100$ | Detects immediate monthly sales trajectory shifts. |
-| **Filter 12** | **City Growth Velocity** | Second derivative of monthly sales: $v = \frac{\Delta \text{Growth}}{\Delta t}$ | Tracks accelerating vs decelerating markets. |
-| **Filter 13** | **Tail SKU Drag** | SKUs contributing $< 1\%$ cumulative turnover with high holding cost. | Candidates for inventory pruning. |
-| **Filter 14** | **Dealer Concentration** | $\text{Top 3 Debtors Share} = \frac{\sum_{i=1}^3 \text{Sales}_{\text{Debtor } i}}{\text{Total Turnover}} \times 100$ | Enforces accounts receivable credit limits. |
-| **Filter 15** | **Discount Leakage** | $\text{Discount Ratio} = \frac{\text{Total Discounts Allowed}}{\text{Gross Invoiced Value}} \times 100$ | Plugs unauthorized distributor discount leaks. |
-| **Filter 16** | **Tax Compliance Split** | $\text{Tax Integrity} = \frac{\text{IGST} + \text{CGST} + \text{SGST}}{\text{Taxable Turnover}} \times 100$ | Validates GST statutory rate adherence across all states. |
+| Lens / Filter ID | Lens Name | Mathematical Formula / Algorithm | Strategic Owner-POV Insight |
+| :---: | :--- | :--- | :--- |
+| **Lens 0** | **Executive Overview** | Composite Health Score (0–100), 3M Momentum %, MoM Change | High-level 360° health overview and board-ready takeaways. |
+| **Lens 1** | **City Revenue Trend** | Linear Regression Slope $m < 0$ & consecutive decline streaks | Detects sustained multi-month territory decline streaks. |
+| **Lens 2** | **City Totals Reference** | $\text{Share}_{\text{City}} = \frac{\text{Revenue}_{\text{City}}}{\text{Total Revenue}} \times 100$, Equal-Share Benchmark | Identifies geographic surplus vs underserved market segments. |
+| **Lens 3** | **Product Totals by City** | Cross-tab matrix: $\sum \text{Revenue}(\text{Product } P, \text{City } C)$ | Surfaces single-product dependency within regional markets (>75%). |
+| **Lens 4** | **Product Contribution Share** | $\text{Share}_{\text{Product}} = \frac{\text{Revenue}_{\text{Product}}}{\text{Total Revenue}} \times 100$ | Measures product-dimension portfolio revenue contribution. |
+| **Lens 5** | **Company-Wide Monthly Trend** | Monthly time-series with zero-month preservation | Complete nationwide month-over-month trajectory (12 months). |
+| **Lens 6** | **Product Month Mix & Momentum**| $\text{Monthly Mix} \% = \frac{\text{Product Rev}_M}{\text{Total Rev}_M} \times 100$, Seasonality Index | 100% Stacked monthly distribution and seasonality classification. |
+| **Lens 7** | **Product Head-to-Head (A vs B)** | Pairwise Delta ($\Delta$), Advantage %, and City win count | Direct head-to-head comparison between any two products. |
+| **Lens 8** | **Product Market Power Ranking** | Dense Rank within city + Market Power scoring (STRONG/MIXED/WEAK) | Evaluates cross-territory product dominance. |
+| **Lens 9** | **Concentration Risk (Dual HHI)** | $\text{HHI}_{\text{prod}} = \sum s_{\text{prod}}^2, \ \text{HHI}_{\text{city}} = \sum s_{\text{city}}^2, \ \text{HHI}_{\text{month}}$ | Company-wide product, geographic, and monthly concentration risks. |
+| **Lens 10**| **Top Combos (Pareto 80/20)** | $\text{Combo Share} = \frac{\text{Turnover}_{P \times C}}{\text{Total Revenue}} \times 100$, Pareto Curve | Core revenue pillars (Top 1 > 15%, Top 3 > 40%, Top 5 > 60%). |
+| **Lens 11**| **Product Contribution Bridge** | Waterfall Attribution: $\Delta \text{Prod}_i / \|\Delta \text{Total}\| \times 100$ | Product-level root cause of start-to-end period revenue changes. |
+| **Lens 12**| **Monthly Contribution Distribution**| Waterfall Attribution across consecutive calendar months | Month-to-month bridge movement and attribution trail. |
+| **Lens 13**| **Month vs Month Head-to-Head** | $\text{Month}_A \text{ vs } \text{Month}_B$ pairwise delta and growth % | Direct comparison between any two reporting months. |
+| **Lens 14**| **Monthly Consistency Ranking** | Multi-market average rank across cities per month | Identifies which months consistently lead across all regions. |
+| **Lens 15**| **Peak & Trough Volatility** | $\text{Ratio} = \text{Peak} / \text{Trough}$ (RED $\ge 3.0$x, AMBER $\ge 2.0$x) | Quantifies SKU demand volatility and supply-chain risk gaps. |
+| **Lens 16**| **Management Action Protocols** | 18 automated protocols (5 RED, 5 AMBER, 8 GREEN) | Prescribes prioritized executive action items with ₹ exposure. |
+| **Lens 17**| **Dictionary, Filters & Audit** | $\text{Variance} = \text{Tally DayBook Total} - \text{Report \#5 Total} \equiv 0.00$ | Mathematical proof guaranteeing 100% reconciliation against Tally. |
+
+---
+
+### Cross-Verification Matrix (CV01–CV16)
+
+The engine automatically enforces 16 cross-verification checks across all 3D data cube partitions:
+- **CV01 (Grand Identity):** $\sum \text{Fact Table} = \text{Tally DayBook Net Total}$
+- **CV02–CV05 (Partition Sums):** $\sum \text{City Totals} = \sum \text{Product Totals} = \sum \text{Monthly Totals} = \sum \text{Combo Totals} = \text{Total Revenue}$
+- **CV09–CV11 (Share Sums):** $\sum \text{Product Shares} = \sum \text{City Shares} = \sum \text{Monthly Mix Shares} = 100.00\%$
+- **CV13 (Bridge Exhaustiveness):** $\sum \Delta \text{Product}_i = \Delta \text{Total}$ (Exact zero-variance waterfall)
+- **CV16 (Voucher Count):** Fact table row count equals Tally DayBook voucher count.
 
 ---
 

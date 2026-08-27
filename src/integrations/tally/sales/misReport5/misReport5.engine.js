@@ -1,7 +1,7 @@
 /**
- * Core Engine for Report #5 (SubCategory x City x Month MIS).
+ * Core Engine for Report #5 (Product x City x Month MIS).
  *
- * Implements the 16-Filter Owner-POV Analytics Suite with Decimal.js precision,
+ * Implements the full 18-Filter Owner-POV Analytics Suite with Decimal.js precision,
  * strict multi-tenant isolation, and high performance aggregation.
  */
 
@@ -33,15 +33,20 @@ const {
   evaluateFilter15_PeakTroughSubCategory,
   evaluateFilter16_PeakTroughMonth
 } = require("./filters/volatilityFinder.filter");
+const {
+  evaluateFilter0_ExecutiveOverview
+} = require("./filters/executiveOverview.filter");
+const {
+  evaluateFilter16_ActionCenter
+} = require("./filters/actionCenter.filter");
+const {
+  evaluateFilter17_AuditReconciliation
+} = require("./filters/auditReconciliation.filter");
 
 const MONTH_ORDER = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
 ];
-
-/**
- * Builds the high-speed multi-dimensional analytical cube from canonical FACT_SALES rows.
- */
 
 const CANONICAL_CITIES = {
   'ahmedabad': 'Ahmedabad',
@@ -113,29 +118,26 @@ function resolveCity(row) {
     else return "Ahmedabad";
   }
 
-  // Strip parenthesized qualifiers like (Gujarat), (Maharashtra), (India)
   const clean = str.replace(/\s*\([^)]*\)/g, "").trim().toLowerCase();
   if (CANONICAL_CITIES[clean]) return CANONICAL_CITIES[clean];
   if (CANONICAL_CITIES[str.toLowerCase()]) return CANONICAL_CITIES[str.toLowerCase()];
 
-  // Title case fallback
   return clean.split(/[\s-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }
 
 function buildMisCube(rows) {
-
   const subCategorySet = new Set();
   const citySet = new Set();
-  const monthMap = new Map(); // monthName -> monthNum or sortKey
+  const monthMap = new Map();
 
   let totalRevenue = new Decimal(0);
   const cityTotals = new Map();
   const subCategoryTotals = new Map();
   const monthTotals = new Map();
 
-  const cityMonthMatrix = new Map(); // city -> (month -> Decimal)
-  const subCategoryCityMatrix = new Map(); // subCat -> (city -> Decimal)
-  const subCategoryMonthMatrix = new Map(); // subCat -> (month -> Decimal)
+  const cityMonthMatrix = new Map();
+  const subCategoryCityMatrix = new Map();
+  const subCategoryMonthMatrix = new Map();
 
   for (const row of rows) {
     if (!row || !row.SalesAmount) continue;
@@ -156,12 +158,10 @@ function buildMisCube(rows) {
 
     totalRevenue = totalRevenue.plus(amt);
 
-    // Totals
     cityTotals.set(city, (cityTotals.get(city) || new Decimal(0)).plus(amt));
     subCategoryTotals.set(subCat, (subCategoryTotals.get(subCat) || new Decimal(0)).plus(amt));
     monthTotals.set(month, (monthTotals.get(month) || new Decimal(0)).plus(amt));
 
-    // Matrices
     if (!cityMonthMatrix.has(city)) cityMonthMatrix.set(city, new Map());
     const cm = cityMonthMatrix.get(city);
     cm.set(month, (cm.get(month) || new Decimal(0)).plus(amt));
@@ -175,21 +175,18 @@ function buildMisCube(rows) {
     sm.set(month, (sm.get(month) || new Decimal(0)).plus(amt));
   }
 
-  // Sort subcategories descending by total revenue
   const subCategories = Array.from(subCategorySet).sort((a, b) => {
     const amtA = subCategoryTotals.get(a) || new Decimal(0);
     const amtB = subCategoryTotals.get(b) || new Decimal(0);
     return amtB.minus(amtA).toNumber();
   });
 
-  // Sort cities descending by total revenue
   const cities = Array.from(citySet).sort((a, b) => {
     const amtA = cityTotals.get(a) || new Decimal(0);
     const amtB = cityTotals.get(b) || new Decimal(0);
     return amtB.minus(amtA).toNumber();
   });
 
-  // Sort months chronologically by MonthNum or calendar order
   const months = Array.from(monthMap.keys()).sort((a, b) => {
     const numA = monthMap.get(a) || (MONTH_ORDER.indexOf(a) + 1);
     const numB = monthMap.get(b) || (MONTH_ORDER.indexOf(b) + 1);
@@ -211,14 +208,6 @@ function buildMisCube(rows) {
   };
 }
 
-/**
- * Execute the 16-Filter Evaluation Engine for MIS Report #5.
- *
- * @param {object} input
- * @param {Array} [input.factSalesRows] Precomputed FACT_SALES rows
- * @param {object} [input.rawContext] Canonical domain records to build factSales if not precomputed
- * @param {object} [input.options] Filter options (filterId, subCatA, subCatB, monthA, monthB, etc.)
- */
 function generateMisReport5(input = {}) {
   const { factSalesRows, rawContext, options = {} } = input;
 
@@ -231,6 +220,7 @@ function generateMisReport5(input = {}) {
 
   const cube = buildMisCube(rows);
 
+  const filter0 = evaluateFilter0_ExecutiveOverview(cube);
   const filter1 = evaluateFilter1_CityRevenueTrend(cube);
   const filter2 = evaluateFilter2_CityTotals(cube);
   const filter3 = evaluateFilter3_SubCategoryTotalByCity(cube);
@@ -246,9 +236,11 @@ function generateMisReport5(input = {}) {
   const filter13 = evaluateFilter13_MonthHeadToHead(cube, options);
   const filter14 = evaluateFilter14_MonthRankingByCity(cube);
   const filter15 = evaluateFilter15_PeakTroughSubCategory(cube);
-  const filter16 = evaluateFilter16_PeakTroughMonth(cube);
+  const filter16 = evaluateFilter16_ActionCenter(cube);
+  const filter17 = evaluateFilter17_AuditReconciliation(cube);
 
   const allFilters = {
+    filter0_executiveOverview: filter0,
     filter1_cityRevenueTrend: filter1,
     filter2_cityTotalsReference: filter2,
     filter3_subCategoryTotalByCity: filter3,
@@ -264,18 +256,18 @@ function generateMisReport5(input = {}) {
     filter13_monthHeadToHead: filter13,
     filter14_monthRankingByCity: filter14,
     filter15_peakTroughSubCategory: filter15,
-    filter16_peakTroughMonth: filter16
+    filter16_actionCenter: filter16,
+    filter17_auditReconciliation: filter17
   };
 
   const filterList = [
-    filter1, filter2, filter3, filter4, filter5, filter6,
+    filter0, filter1, filter2, filter3, filter4, filter5, filter6,
     filter7, filter8, filter9, filter10, filter11, filter12,
-    filter13, filter14, filter15, filter16
+    filter13, filter14, filter15, filter16, filter17
   ];
 
-  // Specific single filter lookup support
   let selectedFilter = null;
-  if (options.filterId) {
+  if (options.filterId !== undefined) {
     const fId = Number(options.filterId);
     selectedFilter = filterList.find((f) => f.filterId === fId) || null;
   }
@@ -283,10 +275,11 @@ function generateMisReport5(input = {}) {
   return {
     metadata: {
       reportCode: "MIS_REPORT_5",
-      reportTitle: "Owner-POV Filter Library — SubCategory x City x Month MIS",
-      grain: "SubCategory x City x Month",
+      reportTitle: "Owner-POV Filter Library — Product × City × Month MIS",
+      grain: "Product × City × Month",
       totalRevenue: toDecimalString(cube.totalRevenue),
       recordCount: rows.length,
+      distinctProducts: cube.subCategories.length,
       distinctSubCategories: cube.subCategories.length,
       distinctCities: cube.cities.length,
       distinctMonths: cube.months.length,
@@ -307,7 +300,7 @@ function generateMisReport5(input = {}) {
       name: f.filterName,
       question: f.ownerQuestion,
       type: f.type,
-      summary: f.summary
+      summary: f.summary || ""
     }))
   };
 }

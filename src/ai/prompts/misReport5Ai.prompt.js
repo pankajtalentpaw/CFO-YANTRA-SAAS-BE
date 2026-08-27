@@ -14,7 +14,7 @@ When analyzing any filter, YOU MUST FORMAT YOUR REPORT UNDER THESE 4 MANDATORY B
 - State the quantified **Cost of Inaction (COI)** in ₹ Lakhs / Crores if this issue is left unaddressed for 90 days.
 
 ### 3. 📊 QUANTIFIED LEDGER FINDINGS:
-- List the exact real city names (e.g. Ahmedabad, Jalgaon, Tumakuru, Vadodara, etc.) or product names with their exact revenue in Indian Rupees (₹), share percentages, linear slopes, and decline streaks.
+- List the exact real city names (e.g. Ahmedabad, Mumbai, Jaipur, New Delhi, etc.) or product names with their exact revenue in Indian Rupees (₹), share percentages, linear slopes, and decline streaks.
 
 ### 4. 🛠️ ACTIONABLE TURNAROUND PLAYBOOK (Isko Kis Tarah Sahi Kiya Jaye?):
 - **Immediate (Weeks 1-2)**: 1-2 rapid cash containment and customer intervention steps.
@@ -23,7 +23,7 @@ When analyzing any filter, YOU MUST FORMAT YOUR REPORT UNDER THESE 4 MANDATORY B
 
 CRITICAL RULES:
 - NEVER use generic placeholders like "City A" or "Product X". Use ONLY the real city and product names from the context.
-- NEVER use dollar signs ($). Use ONLY Indian currency (₹, Lakhs, Crores) with Indian formatting (e.g. ₹46,84,240.00).
+- NEVER use dollar signs ($). Use ONLY Indian currency (₹, Lakhs, Crores) with Indian formatting (e.g. ₹12,10,500.00).
 - Be direct, authoritative, and intensely actionable.
 `;
 

@@ -10,11 +10,15 @@ const analyzeRequestSchema = z.object({
 });
 
 const chatRequestSchema = z.object({
-  question: z.string().min(1).max(10000),
+  question: z.string().max(10000).optional(),
+  filterId: z.union([z.number(), z.string()]).optional(),
+  filterName: z.string().max(200).optional(),
   conversationHistory: z.array(z.object({
     role: z.enum(["user", "assistant", "system"]),
     content: z.string()
   })).optional()
+}).refine((data) => data.question || data.filterId !== undefined, {
+  message: "Either question or filterId must be provided"
 });
 
 /**
@@ -76,7 +80,11 @@ async function chatWithCfo(req, res) {
     const result = await aiAnalysisService.chatWithCfo(
       companyId,
       parsedBody.data.question,
-      { conversationHistory: parsedBody.data.conversationHistory }
+      {
+        filterId: parsedBody.data.filterId,
+        filterName: parsedBody.data.filterName,
+        conversationHistory: parsedBody.data.conversationHistory
+      }
     );
 
     return res.json(result);

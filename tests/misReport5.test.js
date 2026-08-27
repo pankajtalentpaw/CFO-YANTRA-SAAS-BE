@@ -128,12 +128,24 @@ describe("Owner-POV 16-Filter MIS Report #5 Engine", () => {
     expect(shoesRank.status).toBe("STRONG");
   });
 
-  test("Filter 9: Herfindahl-Hirschman Index (HHI) Concentration", () => {
+  test("Filter 9: Dual-Dimension HHI & Monthly Concentration", () => {
     const report = generateMisReport5({ factSalesRows: sampleFactRows });
     const f9 = report.filters.filter9_concentrationRiskHhi;
 
     expect(f9.filterId).toBe(9);
-    // Well distributed across 4 months, so HHI should be low (Diversified)
+    // Company-wide Product HHI
+    expect(f9.productHhi).toBeDefined();
+    expect(f9.productHhi.hhi).toBeGreaterThan(0);
+    expect(f9.productHhi.totalProducts).toBe(2);
+    expect(["DIVERSIFIED", "MODERATE_RISK", "HIGH_RISK"]).toContain(f9.productHhi.riskLevel);
+
+    // Company-wide City HHI
+    expect(f9.cityHhi).toBeDefined();
+    expect(f9.cityHhi.hhi).toBeGreaterThan(0);
+    expect(f9.cityHhi.totalCities).toBe(2);
+    expect(["DIVERSIFIED", "MODERATE_RISK", "HIGH_RISK"]).toContain(f9.cityHhi.riskLevel);
+
+    // SubCategory monthly concentration
     f9.data.forEach((item) => {
       expect(item.hhi).toBeLessThan(0.5);
       expect(item.riskLevel).toBe("DIVERSIFIED");
@@ -178,22 +190,63 @@ describe("Owner-POV 16-Filter MIS Report #5 Engine", () => {
     expect(f14.rankings.length).toBe(4);
   });
 
-  test("Filters 15 & 16: Peak & Trough Volatility Finder", () => {
+  test("Filter 15: Peak & Trough Volatility Finder", () => {
     const report = generateMisReport5({ factSalesRows: sampleFactRows });
     const f15 = report.filters.filter15_peakTroughSubCategory;
-    const f16 = report.filters.filter16_peakTroughMonth;
 
     expect(f15.filterId).toBe(15);
     expect(f15.data.length).toBe(2);
-    // Shoes: Peak July (220k), Trough May (220k) or April (220k)
     f15.data.forEach((item) => {
       expect(Number(item.swing)).toBeGreaterThanOrEqual(0);
       expect(["GREEN", "AMBER", "RED"]).toContain(item.status);
     });
+  });
+
+  test("Filter 16 & 17: Action Center Protocols & Audit Reconciliation", () => {
+    const report = generateMisReport5({ factSalesRows: sampleFactRows });
+    const f16 = report.filters.filter16_actionCenter;
+    const f17 = report.filters.filter17_auditReconciliation;
 
     expect(f16.filterId).toBe(16);
-    expect(f16.peakMonth).toBeDefined();
-    expect(f16.troughMonth).toBeDefined();
+    expect(f16.protocolCounts.total).toBe(18);
+    expect(f16.redProtocols.length).toBe(5);
+
+    expect(f17.filterId).toBe(17);
+    expect(f17.filterDefinitions.length).toBe(18);
+    expect(f17.parameters.totalRevenueFormatted).toBe("1395000.00");
+  });
+
+  test("Cross-Verification Matrix (CV01–CV05 Grand Totals & Partitions)", () => {
+    const report = generateMisReport5({ factSalesRows: sampleFactRows });
+    const totalRev = Number(report.metadata.totalRevenue); // 1395000
+
+    // CV02: City Partition Sum
+    const citySum = report.filters.filter2_cityTotalsReference.data.reduce(
+      (acc, c) => acc + Number(c.totalRevenue),
+      0
+    );
+    expect(citySum).toBe(totalRev);
+
+    // CV03: Product Partition Sum
+    const prodSum = report.filters.filter4_subCategoryContributionShare.data.reduce(
+      (acc, p) => acc + Number(p.totalRevenue),
+      0
+    );
+    expect(prodSum).toBe(totalRev);
+
+    // CV04: Monthly Partition Sum
+    const monthSum = report.filters.filter5_monthTrendCompanyWide.data.reduce(
+      (acc, m) => acc + Number(m.revenue),
+      0
+    );
+    expect(monthSum).toBe(totalRev);
+
+    // CV05: Combo Partition Sum
+    const comboSum = report.filters.filter10_topCombos.topCombos.reduce(
+      (acc, cb) => acc + Number(cb.revenue),
+      0
+    );
+    expect(comboSum).toBe(totalRev);
   });
 
   test("Filter Query by ID returns selectedFilter", () => {

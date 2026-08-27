@@ -7,16 +7,72 @@ const { buildFinancialContext } = require("../formatters/financialContext.builde
 const { resolveCompany } = require("../../services/companyScope.service");
 const companyDataService = require("../../services/companyData.service");
 
+const STRATEGIC_PROMPT_CONFIGS = [
+  {
+    "id": "audit",
+    "label": "🎯 Full Boardroom Audit & Health Grade",
+    "prompt": "Conduct a full 50+ Year Veteran CFO Boardroom Audit with Financial Health Grade."
+  },
+  {
+    "id": "coi",
+    "label": "🚨 Quantify Cost of Inaction on Decline Streaks",
+    "prompt": "Analyze my sustained city decline streaks and quantify the exact Cost of Inaction (COI)."
+  },
+  {
+    "id": "hhi",
+    "label": "🛡️ Stress-Test Single-Product & HHI Risk",
+    "prompt": "Evaluate my single-product concentration traps and Herfindahl Index (HHI) vulnerability."
+  },
+  {
+    "id": "pareto",
+    "label": "💎 Identify Pareto 80/20 Margin Levers",
+    "prompt": "What are my highest-ROI Pareto growth opportunities and margin optimization levers?"
+  },
+  {
+    "id": "roadmap",
+    "label": "📋 Generate 90-Day Tactical Capital Roadmap",
+    "prompt": "Generate a 90-Day Tactical Cash & Capital Allocation Roadmap (Weeks 1-4, 5-8, 9-12)."
+  }
+];
+
+const GENERATION_PARAMETERS = {
+  temperature: 0.2,
+  maxTokens: 3000,
+  contextWindow: "128k",
+  responseFormat: "markdown",
+  reasoningEffort: "high"
+};
+
+const SYSTEM_CAPABILITIES = [
+  "50+ Year Veteran CFO Executive Diagnosis & DuPont Scorecards",
+  "Quantified Cost of Inaction (COI) & Decline Streak Detection",
+  "Herfindahl-Hirschman (HHI) Concentration & Seasonality Stress-Testing",
+  "Pareto 80/20 & Margin Defense Optimization Levers",
+  "90-Day Tactical Capital & Cash Recovery Roadmaps",
+  "18 Multi-Dimensional MIS Filter Lens Deep Audits"
+];
+
+const ANALYTICAL_RULES = [
+  "Always quote real entity names and exact INR (₹) figures without synthetic placeholders",
+  "Structure diagnostic audits under 4 Boardroom Pillars: Root Cause, Business Impact, Quantified Ledger Findings, Turnaround Playbook",
+  "Adhere strictly to deterministic accounting integrity derived directly from Tally register cache"
+];
+
 /**
- * Status check of AI Engine
+ * Status check of AI Engine with dynamic configurations
  */
 function getStatus() {
+  const isConfigured = openaiClient.isConfigured();
   return {
-    configured: openaiClient.isConfigured(),
-    model: openaiClient.model,
+    configured: isConfigured,
+    model: openaiClient.model || "gpt-4o-mini",
     provider: "OpenAI",
     experienceLevel: "50+ Years Enterprise Veteran CFO",
-    fallbackMode: !openaiClient.isConfigured() ? "Simulated Offline CFO Intelligence" : "Live GPT-4o Enterprise Engine"
+    fallbackMode: !isConfigured ? "Simulated Offline CFO Intelligence" : "Live GPT-4o Enterprise Engine",
+    strategicPrompts: STRATEGIC_PROMPT_CONFIGS,
+    generationParameters: GENERATION_PARAMETERS,
+    capabilities: SYSTEM_CAPABILITIES,
+    rules: ANALYTICAL_RULES
   };
 }
 
@@ -73,7 +129,7 @@ function generateSimulatedAudit(company, context, customFocus) {
 ## 2. 🚨 Critical Red Flags & Quantified Cost of Inaction (COI)
 - **Total Immediate Cash at Risk:** **₹${Number(totalCostOfInaction).toLocaleString("en-IN")}** across **${decliningCities.length} declining markets**.
 ${decliningCities.length > 0 ? decliningCities.map((c) => `  - **${c.city} (${c.streak}-Month Consecutive Decline Streak):** Linear slope is negative (${c.slope}). Recoverable cash leakage: **₹${Number(c.costOfInaction).toLocaleString("en-IN")}**. Immediate intervention with distributor accounts required.`).join("\n") : "  - **Regional Momentum:** No markets currently exceed the 3-month decline threshold."}
-- **Concentration Risk:** ${context.report5MIS?.hhiRiskCount || "Elevated single-month seasonality observed."}
+- **Concentration Risk:** ${context.report5MIS?.hhiRiskCount ? `${context.report5MIS.hhiRiskCount} products flag HHI concentration risk.` : "Elevated single-month seasonality observed."}
 ${topCombo ? `- **Pareto Vulnerability:** Top combo **${topCombo.combo}** alone drives **${topCombo.sharePercent}%** of total enterprise turnover.` : ""}
 
 ---
@@ -86,24 +142,24 @@ ${topCombo ? `- **Pareto Vulnerability:** Top combo **${topCombo.combo}** alone 
 ---
 
 ## 4. 📋 90-Day Tactical Capital & Cash Roadmap
-### 🗓️ Weeks 1–4 (Immediate Cash Containment & Account Stabilization)
+### 📅 Weeks 1–4 (Immediate Cash Containment & Account Stabilization)
 - Audit distributor receivables and enforce 45-day payment limits.
 - Freeze volume rebates on products suffering negative margin drag.
 - Deploy direct sales intervention in ${decliningCities[0]?.city || "top declining market"}.
 
-### 🗓️ Weeks 5–8 (Commercial Renegotiation & Margin Expansion)
+### 📅 Weeks 5–8 (Commercial Renegotiation & Margin Expansion)
 - Renegotiate bulk input costs with key suppliers leveraging annual volume.
 - Prune negative-margin and dead-stock SKUs.
 - Implement structured quarterly minimum commitments with primary buyers.
 
-### 🗓️ Weeks 9–12 (Structural Diversification & Governance Scaling)
+### 📅 Weeks 9–12 (Structural Diversification & Governance Scaling)
 - Cap single-product turnover per market below 60% to eliminate single-point failure traps.
 - Establish automated weekly CFO cashflow variance tracking.
 - Launch targeted product cross-selling campaigns across regional hubs.
 
 ---
 
-## ⚡ Veteran CFO's Bottom Line (The Boardroom Mandate)
+## 🎯 Veteran CFO's Bottom Line (The Boardroom Mandate)
 Stop funding unprofitable volume and immediately arrest the **₹${Number(totalCostOfInaction).toLocaleString("en-IN")}** recoverable revenue bleeding in declining regional markets. Focusing capital discipline on your top 20% highest-margin SubCategories will strengthen operating cash flow within 60 days.
 `;
 
@@ -124,12 +180,34 @@ Stop funding unprofitable volume and immediately arrest the **₹${Number(totalC
 
 function generateSimulatedAnswer(question, context) {
   const q = (question || "").toLowerCase();
-  const totalRev = context.report5MIS?.totalRevenue || "0.00";
+  const totalRev = context.report5MIS?.totalRevenue || context.salesMetrics?.invoicedSales || "0.00";
+  const activeAudit = context.activeFilterAudit;
+
+  if (activeAudit) {
+    const filterTitle = activeAudit.filterName || `Filter #${activeAudit.filterId}`;
+    const filterData = activeAudit.data;
+    const recordsCount = Array.isArray(filterData?.data) ? filterData.data.length : (filterData ? Object.keys(filterData).length : 0);
+    return `### 1. 🔍 ROOT CAUSE ANALYSIS (${filterTitle})
+Based on active ledger analysis for ${context.company?.companyName || "the enterprise"}, the primary commercial driver is geographic demand variance and product concentration across key distributor channels.
+
+### 2. 💥 BUSINESS IMPACT & CASHFLOW BLEEDING
+Unmonitored variance in this segment creates working capital lag and margin leakage. If left unmanaged for 90 days, it increases risk on accounts receivable and gross contribution.
+
+### 3. 📊 QUANTIFIED LEDGER FINDINGS
+- **Filter Scope:** ${filterTitle}
+- **Enterprise Turnover:** ₹${Number(totalRev).toLocaleString("en-IN")}
+- **Ledger Records Analyzed:** ${recordsCount} analytical data points verified from active Tally vouchers.
+
+### 4. 🛠️ ACTIONABLE TURNAROUND PLAYBOOK
+- **Immediate (Weeks 1-2):** Standardize trade discounts and reconcile accounts with primary dealers.
+- **Medium Term (Weeks 3-6):** Align minimum order quantities to maintain gross margin thresholds.
+- **Long Term (Weeks 7-12):** Institutionalize monthly ledger reviews against cash-conversion targets.`;
+  }
 
   if (q.includes("risk") || q.includes("hhi") || q.includes("danger") || q.includes("threat")) {
     return `**50+ Year Veteran CFO Risk Assessment:**
 Your primary structural vulnerability is **geographic and single-product concentration**.
-- Several SubCategories exhibit an HHI Index $\\ge 0.80$, meaning you are dangerously dependent on isolated peak billing cycles.
+- Several SubCategories exhibit an HHI Index >= 0.80, meaning you are dangerously dependent on isolated peak billing cycles.
 - A sudden demand shift from a single key buyer or city would severely stress operating cash flow.
 - **Mandate:** Establish 60-day advance orders and diversify customer base across tier-2 cities.`;
   }
@@ -156,7 +234,6 @@ Based on your enterprise turnover of **₹${Number(totalRev).toLocaleString("en-
  * Run comprehensive 50+ Year Veteran CFO analysis for a company
  */
 async function generateExecutiveAudit(companyId, { customFocus = null, forceOffline = false } = {}) {
-  // 1. Gather all analytical context
   const resolution = await resolveCompany(companyId);
   if (!resolution || resolution.ok === false) {
     throw new Error(`Company not found for id: ${companyId}`);
@@ -171,7 +248,6 @@ async function generateExecutiveAudit(companyId, { customFocus = null, forceOffl
   const context = buildFinancialContext({ company, salesAnalysis, misReport5 });
   const scorecard = calculateExecutiveScorecard(context);
 
-  // 2. If OpenAI is configured and not forced offline, run live LLM
   if (openaiClient.isConfigured() && !forceOffline) {
     try {
       const userPrompt = buildExecutiveAuditUserPrompt({
@@ -213,16 +289,15 @@ async function generateExecutiveAudit(companyId, { customFocus = null, forceOffl
     }
   }
 
-  // 3. Fallback: High-conviction deterministic CFO simulation
   const sim = generateSimulatedAudit(company, context, customFocus);
   sim.scorecard = scorecard;
   return sim;
 }
 
 /**
- * Interactive Financial Q&A with Virtual CFO
+ * Interactive Financial Q&A with Virtual CFO supporting dynamic filter audits
  */
-async function chatWithCfo(companyId, question, { conversationHistory = [] } = {}) {
+async function chatWithCfo(companyId, rawQuestion, { filterId, filterName, conversationHistory = [] } = {}) {
   const resolution = await resolveCompany(companyId);
   if (!resolution || resolution.ok === false) {
     throw new Error(`Company not found for id: ${companyId}`);
@@ -236,6 +311,34 @@ async function chatWithCfo(companyId, question, { conversationHistory = [] } = {
 
   const context = buildFinancialContext({ company, salesAnalysis, misReport5 });
 
+  let question = (rawQuestion || "").trim();
+  let activeFilterData = null;
+  let resolvedFilterName = filterName;
+
+  if (filterId !== undefined && filterId !== null && filterId !== "") {
+    const filterDef = misReport5?.filterIndex?.find((f) => Number(f.id) === Number(filterId));
+    if (filterDef && !resolvedFilterName) {
+      resolvedFilterName = filterDef.name;
+    }
+    const filterKey = Object.keys(misReport5?.filters || {}).find((k) => k.startsWith(`filter${filterId}_`));
+    if (filterKey && misReport5?.filters?.[filterKey]) {
+      activeFilterData = misReport5.filters[filterKey];
+    }
+    if (!question) {
+      question = `Conduct a comprehensive 50+ Year Veteran CFO diagnostic audit on Filter #${filterId} (${resolvedFilterName || `Filter ${filterId}`}) addressing: 1. Root Cause, 2. Business Impact, 3. Quantified Ledger Findings, 4. Actionable Turnaround Playbook.`;
+    }
+  }
+
+  const promptContext = {
+    ...context,
+    company: {
+      companyId: company.companyId,
+      companyName: company.companyName,
+      startingAt: company.startingAt
+    },
+    ...(activeFilterData ? { activeFilterAudit: { filterId, filterName: resolvedFilterName, data: activeFilterData } } : {})
+  };
+
   if (openaiClient.isConfigured()) {
     try {
       const messages = [
@@ -243,14 +346,14 @@ async function chatWithCfo(companyId, question, { conversationHistory = [] } = {
         ...conversationHistory.slice(-6),
         {
           role: "user",
-          content: buildChatUserPrompt({ companyName: company.companyName, question, context })
+          content: buildChatUserPrompt({ companyName: company.companyName, question, context: promptContext })
         }
       ];
 
       const completion = await openaiClient.createChatCompletion({
         messages,
         temperature: 0.2,
-        maxTokens: 1500
+        maxTokens: 2000
       });
 
       return {
@@ -258,13 +361,17 @@ async function chatWithCfo(companyId, question, { conversationHistory = [] } = {
         mode: "live",
         answer: completion.content,
         model: completion.model,
+        filterId: filterId ?? null,
+        filterName: resolvedFilterName ?? null,
         generatedAt: new Date().toISOString()
       };
     } catch (err) {
       return {
         success: true,
         mode: "simulated",
-        answer: generateSimulatedAnswer(question, context),
+        answer: generateSimulatedAnswer(question, promptContext),
+        filterId: filterId ?? null,
+        filterName: resolvedFilterName ?? null,
         notice: `API notice: ${err.message}`,
         generatedAt: new Date().toISOString()
       };
@@ -274,7 +381,9 @@ async function chatWithCfo(companyId, question, { conversationHistory = [] } = {
   return {
     success: true,
     mode: "simulated",
-    answer: generateSimulatedAnswer(question, context),
+    answer: generateSimulatedAnswer(question, promptContext),
+    filterId: filterId ?? null,
+    filterName: resolvedFilterName ?? null,
     generatedAt: new Date().toISOString()
   };
 }
