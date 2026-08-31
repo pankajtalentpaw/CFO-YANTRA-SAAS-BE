@@ -129,6 +129,7 @@ function buildFactSales(input) {
   const rows = [];
   const rejected = [];
   const seenRowIds = new Set();
+  const validSalesVouchers = new Map();
 
   for (const voucher of salesVouchers) {
     // Company isolation: a voucher from another company is never joined here.
@@ -148,6 +149,9 @@ function buildFactSales(input) {
       rejected.push({ sourceVoucherId: voucher.sourceVoucherId, reason: "NO_INVENTORY_ENTRIES" });
       continue;
     }
+
+    const vKey = voucher.guid || voucher.sourceVoucherId || voucher.sourceObjectId || voucher.voucherNumber || Math.random();
+    if (!validSalesVouchers.has(vKey)) validSalesVouchers.set(vKey, voucher);
 
     const { month, monthNum } = deriveMonth(voucher.voucherDate);
     const partyLedger = lookup(ledgerIndex, companyId, { name: voucher.partyLedgerName });
@@ -245,6 +249,10 @@ function buildFactSales(input) {
   }
 
   const total = rows.reduce((sum, row) => sum.plus(toDecimal(row.SalesAmount)), toDecimal(0));
+  let grossVoucherTotal = toDecimal(0);
+  validSalesVouchers.forEach((v) => {
+    grossVoucherTotal = grossVoucherTotal.plus(toDecimal(v.amount || 0));
+  });
 
   return {
     companyId,
@@ -253,10 +261,11 @@ function buildFactSales(input) {
     rows,
     rejected,
     stats: {
-      voucherCount: salesVouchers.filter((v) => v && v.companyId === companyId).length,
+      voucherCount: validSalesVouchers.size,
       rowCount: rows.length,
       rejectedCount: rejected.length,
-      totalSalesAmount: toDecimalString(total)
+      totalSalesAmount: toDecimalString(total),
+      grossVoucherTotal: toDecimalString(grossVoucherTotal)
     }
   };
 }

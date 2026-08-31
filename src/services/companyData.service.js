@@ -605,6 +605,8 @@ async function getMisReport5(company, options = {}) {
 
   const report = generateMisReport5({
     factSalesRows: factResult.rows || [],
+    factStats: factResult.stats || {},
+    rawVouchers: voucherRes.records || [],
     options
   });
 

@@ -209,7 +209,7 @@ function buildMisCube(rows) {
 }
 
 function generateMisReport5(input = {}) {
-  const { factSalesRows, rawContext, options = {} } = input;
+  const { factSalesRows, factStats, rawVouchers, rawContext, options = {} } = input;
 
   let rows = factSalesRows;
   if (!rows && rawContext) {
@@ -219,6 +219,30 @@ function generateMisReport5(input = {}) {
   rows = rows || [];
 
   const cube = buildMisCube(rows);
+
+  let grossTotal = new Decimal(0);
+  if (factStats && factStats.grossVoucherTotal) {
+    grossTotal = toDecimal(factStats.grossVoucherTotal);
+  } else if (rawVouchers && Array.isArray(rawVouchers)) {
+    const seenVouchers = new Set();
+    for (const v of rawVouchers) {
+      if (!v) continue;
+      const vType = String(v.voucherTypeName || v.voucherType || "").trim().toLowerCase();
+      if (vType && !vType.includes("sales") && !vType.includes("credit note") && !vType.includes("delivery") && !vType.includes("tax invoice")) {
+        continue;
+      }
+      const vKey = v.guid || v.sourceVoucherId || v.sourceObjectId || v.voucherNumber;
+      if (vKey && seenVouchers.has(vKey)) continue;
+      if (vKey) seenVouchers.add(vKey);
+      grossTotal = grossTotal.plus(toDecimal(v.amount || 0));
+    }
+  } else {
+    grossTotal = cube.totalRevenue;
+  }
+
+  const netRevenueDec = cube.totalRevenue;
+  const grossRevenueDec = grossTotal.greaterThanOrEqualTo(netRevenueDec) ? grossTotal : netRevenueDec;
+  const chargesAndGstDec = grossRevenueDec.minus(netRevenueDec);
 
   const filter0 = evaluateFilter0_ExecutiveOverview(cube);
   const filter1 = evaluateFilter1_CityRevenueTrend(cube);
@@ -277,7 +301,9 @@ function generateMisReport5(input = {}) {
       reportCode: "MIS_REPORT_5",
       reportTitle: "Owner-POV Filter Library — Product × City × Month MIS",
       grain: "Product × City × Month",
-      totalRevenue: toDecimalString(cube.totalRevenue),
+      totalRevenue: toDecimalString(netRevenueDec),
+      grossRevenue: toDecimalString(grossRevenueDec),
+      chargesAndGst: toDecimalString(chargesAndGstDec),
       recordCount: rows.length,
       distinctProducts: cube.subCategories.length,
       distinctSubCategories: cube.subCategories.length,
@@ -286,7 +312,9 @@ function generateMisReport5(input = {}) {
       generatedAt: new Date().toISOString()
     },
     executiveSummary: {
-      totalRevenue: toDecimalString(cube.totalRevenue),
+      totalRevenue: toDecimalString(netRevenueDec),
+      grossRevenue: toDecimalString(grossRevenueDec),
+      chargesAndGst: toDecimalString(chargesAndGstDec),
       cityTrendHeadline: filter1.summary,
       productDeclineHeadline: filter6.summary,
       concentrationAlert: filter9.summary,
