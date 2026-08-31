@@ -12,6 +12,7 @@ const { parseCompanies } = require("../integrations/tally/tally.parser");
 const { buildCompanyListRequest, buildEnvelope } = require("../integrations/tally/tally.requests");
 const { ingestionError, classifyTransportFailure, INGESTION_ERROR_CODES } = require("../integrations/tally/sales/factSales.errors");
 const mirror = require("./sync/mirror.service");
+const { paginate } = require("../utils/pagination");
 
 const GSTIN_REGEX = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i;
 
@@ -240,46 +241,6 @@ async function resolveCompany(companyId) {
   return { ok: true, company };
 }
 
-/**
- * Apply search, sort and pagination to an already company-scoped list.
- * Kept out of the extractors so every module paginates identically.
- *
- * @param {Array} records
- * @param {object} query
- * @param {number} [query.page=1]
- * @param {number} [query.limit=50]
- * @param {string} [query.search]
- * @param {string[]} [searchFields] Fields the search term is matched against
- */
-function paginate(records, query = {}, searchFields = ["name"]) {
-  const page = Math.max(1, Number(query.page) || 1);
-  const limit = Math.min(500, Math.max(1, Number(query.limit) || 50));
-  const search = (query.search || "").trim().toLowerCase();
-
-  let filtered = records;
-  if (search) {
-    filtered = records.filter((record) =>
-      searchFields.some((field) => {
-        const value = field.split(".").reduce((acc, part) => (acc ? acc[part] : undefined), record);
-        return value !== undefined && value !== null && String(value).toLowerCase().includes(search);
-      })
-    );
-  }
-
-  const total = filtered.length;
-  const start = (page - 1) * limit;
-
-  return {
-    items: filtered.slice(start, start + limit),
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit) || 0,
-      hasMore: start + limit < total
-    }
-  };
-}
 
 module.exports = {
   isCacheable,

@@ -31,8 +31,11 @@ const SECURITY = Object.freeze({
   CHECKSUM_ALGORITHM: "sha256"
 });
 
+const statusCodes = require("./statusCodes");
+
 module.exports = {
   FAILURE_CODES,
   TALLY_REQUEST_TYPES,
-  SECURITY
+  SECURITY,
+  ...statusCodes
 };

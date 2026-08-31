@@ -1,0 +1,61 @@
+const { z } = require("zod");
+const { paginationQuerySchema, filterStringOrArray, dateYyyymmdd } = require("./common.validation");
+
+/**
+ * Company query validation schemas.
+ */
+
+// Basic list query with pagination and search
+const listQuerySchema = paginationQuerySchema;
+
+// Voucher register query schema
+const voucherQuerySchema = listQuerySchema.extend({
+  type: filterStringOrArray,
+  fromDate: dateYyyymmdd.optional(),
+  toDate: dateYyyymmdd.optional()
+});
+
+// Sales analysis query schema with dimension filters
+const salesAnalysisQuerySchema = voucherQuerySchema.extend({
+  customer: filterStringOrArray,
+  product: filterStringOrArray,
+  country: filterStringOrArray,
+  state: filterStringOrArray,
+  city: filterStringOrArray
+});
+
+// Purchase analysis query schema with dimension filters
+const purchaseAnalysisQuerySchema = voucherQuerySchema.extend({
+  supplier: filterStringOrArray,
+  product: filterStringOrArray,
+  country: filterStringOrArray,
+  state: filterStringOrArray,
+  city: filterStringOrArray
+});
+
+// Dashboard overview query schema
+const dashboardQuerySchema = z.object({
+  fromDate: dateYyyymmdd.optional(),
+  toDate: dateYyyymmdd.optional()
+});
+
+// MIS Report 5 query schema
+const report5QuerySchema = z.object({
+  fromDate: dateYyyymmdd.optional(),
+  toDate: dateYyyymmdd.optional(),
+  filterId: z.coerce.number().int().min(1).max(16).optional(),
+  subCatA: z.string().max(200).optional(),
+  subCatB: z.string().max(200).optional(),
+  monthA: z.string().max(50).optional(),
+  monthB: z.string().max(50).optional()
+});
+
+module.exports = {
+  listQuerySchema,
+  voucherQuerySchema,
+  salesAnalysisQuerySchema,
+  purchaseAnalysisQuerySchema,
+  dashboardQuerySchema,
+  report5QuerySchema,
+  filterStringOrArray
+};

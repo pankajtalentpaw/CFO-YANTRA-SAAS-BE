@@ -6,44 +6,19 @@
  * Function-based architecture.
  */
 
-const { z } = require("zod");
 const { listCompanies, resolveCompany, paginate } = require("../services/companyScope.service");
 const service = require("../services/companyData.service");
 const dashboardService = require("../services/dashboard.service");
 const { calculateVoucherLedgerBreakdown } = require("../integrations/tally/canonical/accountingAnalysis.engine");
-
-/** Every list endpoint accepts the same paging/search contract. */
-const listQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-  search: z.string().max(200).optional()
-});
-
-const filterStringOrArray = z.union([z.string().max(2000), z.array(z.string().max(500))]).optional();
-
-const voucherQuerySchema = listQuerySchema.extend({
-  type: filterStringOrArray,
-  fromDate: z.string().regex(/^\d{8}$/, "fromDate must be yyyymmdd").optional(),
-  toDate: z.string().regex(/^\d{8}$/, "toDate must be yyyymmdd").optional()
-});
-
-/** Sales analysis adds dimension filters on top of the period. */
-const salesAnalysisQuerySchema = voucherQuerySchema.extend({
-  customer: filterStringOrArray,
-  product: filterStringOrArray,
-  country: filterStringOrArray,
-  state: filterStringOrArray,
-  city: filterStringOrArray
-});
-
-/** Purchase analysis adds dimension filters for suppliers and products. */
-const purchaseAnalysisQuerySchema = voucherQuerySchema.extend({
-  supplier: filterStringOrArray,
-  product: filterStringOrArray,
-  country: filterStringOrArray,
-  state: filterStringOrArray,
-  city: filterStringOrArray
-});
+const {
+  listQuerySchema,
+  voucherQuerySchema,
+  salesAnalysisQuerySchema,
+  purchaseAnalysisQuerySchema,
+  dashboardQuerySchema,
+  report5QuerySchema,
+  filterStringOrArray
+} = require("../validations");
 
 /**
  * Resolve the companyId from the route and reject anything Tally does not know.
@@ -446,12 +421,6 @@ const getPurchaseAnalysis = withCompany(async (req, res, company) => {
   });
 });
 
-/** The dashboard reads one period; the aggregate itself needs no paging. */
-const dashboardQuerySchema = z.object({
-  fromDate: z.string().regex(/^\d{8}$/, "fromDate must be yyyymmdd").optional(),
-  toDate: z.string().regex(/^\d{8}$/, "toDate must be yyyymmdd").optional()
-});
-
 /**
  * Aggregated business overview for the dashboard.
  *
@@ -497,16 +466,6 @@ const getReconciliationReport = withCompany(async (req, res, company) => {
     available: true,
     report: result || {}
   });
-});
-
-const report5QuerySchema = z.object({
-  fromDate: z.string().regex(/^\d{8}$/, "fromDate must be yyyymmdd").optional(),
-  toDate: z.string().regex(/^\d{8}$/, "toDate must be yyyymmdd").optional(),
-  filterId: z.coerce.number().int().min(1).max(16).optional(),
-  subCatA: z.string().max(200).optional(),
-  subCatB: z.string().max(200).optional(),
-  monthA: z.string().max(50).optional(),
-  monthB: z.string().max(50).optional()
 });
 
 const getMisReport5 = withCompany(async (req, res, company) => {

@@ -9,36 +9,67 @@ const tallySyncJob = require("./jobs/tallySync.job");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const { apiVersionMiddleware } = require("./versioning");
+const { HTTP_STATUS, APP_ERROR_CODES, createErrorPayload } = require("./constants/statusCodes");
+
 // Middlewares
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// API Routes
-app.use("/api", apiRoutes);
+// Apply API Versioning Engine strictly to /api/v1
+app.use("/api/v1", apiVersionMiddleware());
+
+// API Routes - Mount strictly on /api/v1
+app.use("/api/v1", apiRoutes);
 
 // Root Health
 app.get("/", (req, res) => {
   res.json({
     name: "CFO Yantra Backend API",
     version: "1.0.0",
-    docs: "/api/health",
+    docs: "/api/v1/health",
     tallyEndpoint: `http://${env.tally.host}:${env.tally.port}`
   });
 });
 
-// 404 for unmatched API routes, so a typo returns JSON instead of HTML.
+// 404 for unmatched /api/v1 routes
+app.use("/api/v1", (req, res) => {
+  res.status(HTTP_STATUS.NOT_FOUND).json(
+    createErrorPayload(
+      HTTP_STATUS.NOT_FOUND,
+      `No such endpoint: ${req.method} ${req.originalUrl}`,
+      APP_ERROR_CODES.ROUTE_NOT_FOUND
+    )
+  );
+});
+
+// Reject unversioned /api access with clear guidance to use /api/v1
 app.use("/api", (req, res) => {
-  res.status(404).json({ success: false, error: `No such endpoint: ${req.method} ${req.originalUrl}` });
+  res.status(HTTP_STATUS.NOT_FOUND).json(
+    createErrorPayload(
+      HTTP_STATUS.NOT_FOUND,
+      `Direct /api access is not supported. Please use /api/v1${req.path === "/" ? "" : req.path}`,
+      APP_ERROR_CODES.API_VERSION_UNSUPPORTED
+    )
+  );
 });
 
 // Centralized error handler
 app.use((err, req, res, next) => {
   logger.error({ error: err.message, stack: err.stack }, "Unhandled backend error");
   if (res.headersSent) return next(err);
-  res.status(500).json({
-    success: false,
-    error: err.message || "Internal server error"
-  });
+
+  const status = err.statusCode || HTTP_STATUS.INTERNAL_SERVER_ERROR;
+  const errorCode = err.errorCode || (status >= 500 ? APP_ERROR_CODES.INTERNAL_SERVER_ERROR : APP_ERROR_CODES.VALIDATION_FAILED);
+
+  res.status(status).json(
+    createErrorPayload(
+      status,
+      err.message || "Internal server error",
+      errorCode,
+      err.details || undefined
+    )
+  );
 });
 
 /**

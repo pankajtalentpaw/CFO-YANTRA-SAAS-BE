@@ -1,3 +1,4 @@
+const dns = require("dns");
 const mongoose = require("mongoose");
 const env = require("./env");
 const { logger } = require("../utils/logger");
@@ -34,6 +35,13 @@ async function connectDatabase() {
 
   connecting = (async () => {
     try {
+      if (env.mongo.uri && env.mongo.uri.startsWith("mongodb+srv://")) {
+        try {
+          dns.setServers(["8.8.8.8", "1.1.1.1"]);
+        } catch (dnsErr) {
+          // ignore
+        }
+      }
       await mongoose.connect(env.mongo.uri, {
         // Fail fast instead of buffering commands forever when mongod is down,
         // otherwise a missing database would stall API requests.

@@ -1,16 +1,6 @@
-const { z } = require("zod");
 const { runFactSalesIngestion } = require("../integrations/tally/sales/factSales.pipeline");
-
-/**
- * Query validation at the external boundary. Dates stay strings because Tally
- * expects its own yyyymmdd form, not a JS Date.
- */
-const factSalesQuerySchema = z.object({
-  companyId: z.string().min(1).optional(),
-  fromDate: z.string().regex(/^\d{8}$/, "fromDate must be yyyymmdd").optional(),
-  toDate: z.string().regex(/^\d{8}$/, "toDate must be yyyymmdd").optional(),
-  includeRows: z.enum(["true", "false"]).optional()
-});
+const { factSalesQuerySchema } = require("../validations");
+const { HTTP_STATUS, APP_ERROR_CODES, sendError } = require("../constants/statusCodes");
 
 /**
  * GET /api/factsales — run the read-only FACT_SALES ingestion pipeline.
@@ -19,11 +9,13 @@ const factSalesQuerySchema = z.object({
 async function getFactSales(req, res) {
   const parsedQuery = factSalesQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid query parameters",
-      issues: parsedQuery.error.issues.map((i) => ({ path: i.path.join("."), message: i.message }))
-    });
+    return sendError(
+      res,
+      HTTP_STATUS.BAD_REQUEST,
+      "Invalid query parameters",
+      APP_ERROR_CODES.INVALID_QUERY_PARAMS,
+      parsedQuery.error.issues.map((i) => ({ path: i.path.join("."), message: i.message }))
+    );
   }
 
   const { companyId, fromDate, toDate, includeRows } = parsedQuery.data;
@@ -35,7 +27,7 @@ async function getFactSales(req, res) {
     });
 
     if (!result.success && result.error) {
-      return res.status(502).json({ success: false, ...result });
+      return res.status(HTTP_STATUS.BAD_GATEWAY).json({ success: false, ...result });
     }
 
     const summarized = result.results.map((companyResult) => ({
@@ -46,7 +38,12 @@ async function getFactSales(req, res) {
 
     return res.json({ ...result, results: summarized });
   } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
+    return sendError(
+      res,
+      HTTP_STATUS.INTERNAL_SERVER_ERROR,
+      err.message,
+      APP_ERROR_CODES.INTERNAL_SERVER_ERROR
+    );
   }
 }
 
