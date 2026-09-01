@@ -361,16 +361,18 @@ describe("Missing data is recorded, never fabricated", () => {
     expect(rows.find((r) => r.SubCategory === "Product B").Category).toBeNull();
   });
 
-  test("service invoices (no inventory entries) are rejected with a reason", () => {
-    // Observed live: Tally returns <ALLINVENTORYENTRIES.LIST> empty for service sales.
+  test("service invoices (no inventory entries) are parsed into service fact rows", () => {
+    // Tally returns <ALLINVENTORYENTRIES.LIST> empty for service sales (accounting invoices).
     const raw = rawSalesVoucher({ "ALLINVENTORYENTRIES.LIST": "   ", "LEDGERENTRIES.LIST": [
       { LEDGERNAME: "Service Customer", AMOUNT: "-590000.00" }
     ], "ALLLEDGERENTRIES.LIST": undefined });
     const voucher = normalizeSalesVoucher(raw, { companyId: COMPANY_A });
     expect(voucher.ledgerEntries).toHaveLength(1);
     const { rows, rejected } = buildFactSales(baseInput({ salesVouchers: [voucher] }));
-    expect(rows).toHaveLength(0);
-    expect(rejected[0].reason).toBe("NO_INVENTORY_ENTRIES");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].Category).toBe("Service");
+    expect(rows[0].SalesAmount).toBe("590000.00");
+    expect(rejected).toHaveLength(0);
   });
 
   test("cancelled vouchers are rejected, not silently counted", () => {

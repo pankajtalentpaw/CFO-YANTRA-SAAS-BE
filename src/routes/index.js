@@ -6,6 +6,7 @@ const companiesRoutes = require("./companiesRoutes");
 const diagnosticsRoutes = require("./diagnosticsRoutes");
 const syncRoutes = require("./syncRoutes");
 const cloudRoutes = require("./cloudRoutes");
+const authRoutes = require("./authRoutes");
 
 // Health
 router.get("/health", (req, res) => {
@@ -18,6 +19,7 @@ router.get("/health", (req, res) => {
 });
 
 // Mounted Routes
+router.use("/auth", authRoutes);
 router.use("/tally", tallyRoutes);
 router.use("/companies", companiesRoutes);
 router.use("/diagnostics", diagnosticsRoutes);

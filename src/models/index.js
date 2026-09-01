@@ -36,8 +36,10 @@ const DOMAIN_MODELS = {
 };
 
 const DOMAIN_NAMES = Object.keys(DOMAIN_MODELS);
+const User = require("./userModel");
 
 module.exports = {
+  User,
   Company,
   SyncState,
   Voucher,

@@ -6,6 +6,8 @@
  * prefer stable Tally identities (GUID/MasterId) over display names.
  *
  * Grain: one row per COMPANY + SALES VOUCHER + INVENTORY ENTRY.
+ * For accounting/service invoices (no inventory entries), one row per voucher
+ * is synthesized from ledger entries so service companies are never excluded.
  */
 
 const { toDecimal, toDecimalString } = require("../../../utils/financialDecimal");
@@ -69,7 +71,7 @@ function resolveSalesman(inventoryEntry, voucher, costCentreIndex, companyId, co
   }
 
   const allocations = [
-    ...(inventoryEntry.costCentreAllocations || []),
+    ...((inventoryEntry && inventoryEntry.costCentreAllocations) || []),
     ...(voucher.ledgerEntries || []).flatMap((entry) => entry.costCentreAllocations || [])
   ];
   const allocation = allocations.find((item) => item && item.costCentreName);
@@ -79,10 +81,79 @@ function resolveSalesman(inventoryEntry, voucher, costCentreIndex, companyId, co
   }
 
   const costCentre = lookup(costCentreIndex, companyId, { name: allocation.costCentreName });
+
   return {
     salesman: costCentre ? costCentre.name : allocation.costCentreName,
     costCentreName: allocation.costCentreName,
     reason: null
+  };
+}
+
+/**
+ * Classify a ledger entry's role based on its name, mirroring the classification
+ * logic from accountingAnalysis.engine.js so accounting invoices are treated
+ * consistently across all report engines.
+ */
+function classifyLedgerRole(ledgerName, partyLedgerName = "") {
+  const name = String(ledgerName || "").toLowerCase().trim();
+  const party = String(partyLedgerName || "").toLowerCase().trim();
+
+  if (party && name === party) return "PARTY";
+
+  // Tax / Duties
+  if (/\b(cgst|central\s*tax|central\s*goods)\b/i.test(name)) return "TAX";
+  if (/\b(sgst|state\s*tax|state\s*goods|utgst|union\s*territory)\b/i.test(name)) return "TAX";
+  if (/\b(igst|integrated\s*tax|integrated\s*goods)\b/i.test(name)) return "TAX";
+  if (/\b(cess|compensation\s*cess)\b/i.test(name)) return "TAX";
+  if (/\b(duties\s*&\s*taxes|tax|gst|vat|tds|tcs)\b/i.test(name)) return "TAX";
+
+  // Round Off
+  if (/\b(round\s*off|rounding|roundoff|round\s*adjustment)\b/i.test(name)) return "ROUND_OFF";
+
+  // Discounts
+  if (/\b(discount|rebate|trade\s*disc|cash\s*disc|disc\s*allowed|disc\s*received)\b/i.test(name)) return "DISCOUNT";
+
+  // Additional Charges
+  if (/\b(freight|transport|cartage|shipping|courier|insurance|packing|loading|handling|forwarding|delivery\s*charges)\b/i.test(name)) {
+    return "ADDITIONAL_CHARGES";
+  }
+
+  // Default: Base Income or Expense / Sales or Purchase ledger
+  return "BASE_AMOUNT";
+}
+
+/**
+ * For accounting/service invoices (no inventory entries), derive the base sales
+ * amount and a product name from the voucher's ledger entries.
+ *
+ * Returns { salesAmount: string, productName: string } — both always present.
+ */
+function deriveAccountingInvoiceFields(voucher) {
+  const entries = Array.isArray(voucher.ledgerEntries) ? voucher.ledgerEntries : [];
+  const partyName = voucher.partyLedgerName || "";
+
+  let baseLedgerName = null;
+  let baseAmount = toDecimal(0);
+
+  for (const entry of entries) {
+    if (!entry || !entry.ledgerName) continue;
+    const role = classifyLedgerRole(entry.ledgerName, partyName);
+    if (role === "BASE_AMOUNT") {
+      if (!baseLedgerName) baseLedgerName = entry.ledgerName;
+      // Accumulate all base amount ledger entries (e.g. multiple service lines)
+      baseAmount = baseAmount.plus(toDecimal(entry.amount || 0).abs());
+    }
+  }
+
+  // If we found no explicit base amount ledger, use the voucher-level amount
+  // minus taxes as a best-effort approximation.
+  if (baseAmount.isZero() && voucher.amount) {
+    baseAmount = toDecimal(voucher.amount).abs();
+  }
+
+  return {
+    salesAmount: toDecimalString(baseAmount),
+    productName: baseLedgerName || "(Service / Accounting Invoice)"
   };
 }
 
@@ -145,11 +216,110 @@ function buildFactSales(input) {
       rejected.push({ sourceVoucherId: voucher.sourceVoucherId, reason: "VOUCHER_CANCELLED_OR_OPTIONAL" });
       continue;
     }
-    if (!voucher.inventoryEntries || voucher.inventoryEntries.length === 0) {
-      rejected.push({ sourceVoucherId: voucher.sourceVoucherId, reason: "NO_INVENTORY_ENTRIES" });
+
+    const hasInventory = voucher.inventoryEntries && voucher.inventoryEntries.length > 0;
+
+    // -----------------------------------------------------------------------
+    // Accounting / service invoices: synthesize a single fact row from ledger
+    // entries. This path ensures service companies (inventory: false, zero
+    // stock items) are never silently excluded from the Owner MIS.
+    // -----------------------------------------------------------------------
+    if (!hasInventory) {
+      const hasLedgerEntries = voucher.ledgerEntries && voucher.ledgerEntries.length > 0;
+      if (!hasLedgerEntries && !voucher.amount) {
+        rejected.push({ sourceVoucherId: voucher.sourceVoucherId, reason: "NO_INVENTORY_OR_LEDGER_ENTRIES" });
+        continue;
+      }
+
+      const vKey = voucher.guid || voucher.sourceVoucherId || voucher.sourceObjectId || voucher.voucherNumber || Math.random();
+      if (!validSalesVouchers.has(vKey)) validSalesVouchers.set(vKey, voucher);
+
+      const { month, monthNum } = deriveMonth(voucher.voucherDate);
+      const partyLedger = lookup(ledgerIndex, companyId, { name: voucher.partyLedgerName });
+
+      const voucherQuality = [];
+      if (!voucher.partyLedgerName) voucherQuality.push(DATA_QUALITY_REASONS.CUSTOMER_MISSING);
+      if (voucher.partyLedgerName && !partyLedger) voucherQuality.push(DATA_QUALITY_REASONS.LEDGER_NOT_FOUND);
+
+      const state = partyLedger && partyLedger.address ? partyLedger.address.stateName || null : null;
+      let fallbackCity = null;
+      if (state && (state.toLowerCase().includes("dar es salaam") || state.toLowerCase().includes("delhi") || state.toLowerCase().includes("chandigarh"))) {
+        fallbackCity = state;
+      } else if (state && state.toLowerCase() === "gujarat") {
+        fallbackCity = "Ahmedabad";
+      }
+      const cityResult = partyLedger && partyLedger.address
+        ? parseCity(partyLedger.address.lines, { knownState: state })
+        : { city: null, confidence: "none", rawAddress: null, reason: DATA_QUALITY_REASONS.ADDRESS_EMPTY };
+
+      const classification = resolveClassification(
+        classificationIndex,
+        companyId,
+        partyLedger ? partyLedger.sourceObjectId : null
+      );
+
+      const { salesAmount, productName } = deriveAccountingInvoiceFields(voucher);
+      const salesman = resolveSalesman(null, voucher, costCentreIndex, companyId, costCentresEnabled);
+
+      // Synthesized entry ID for accounting invoices
+      const syntheticEntryId = `${voucher.sourceVoucherId}#ACCT1`;
+      const rowId = buildRowId(companyId, voucher.sourceVoucherId, syntheticEntryId);
+
+      if (seenRowIds.has(rowId)) {
+        rejected.push({ rowId, sourceVoucherId: voucher.sourceVoucherId, reason: "DUPLICATE_ROW_ID" });
+        continue;
+      }
+      seenRowIds.add(rowId);
+
+      const rowQuality = [...voucherQuality, ...classification.reasons];
+      if (!state) rowQuality.push(DATA_QUALITY_REASONS.STATE_NOT_AVAILABLE);
+      if (!cityResult.city) rowQuality.push(cityResult.reason || DATA_QUALITY_REASONS.CITY_NOT_PARSEABLE);
+      if (salesman.reason) rowQuality.push(salesman.reason);
+
+      rows.push({
+        // --- public FACT_SALES contract ---
+        RowID: rowId,
+        Month: month,
+        MonthNum: monthNum,
+        Customer: voucher.partyLedgerName || null,
+        SalesAmount: salesAmount,
+        Category: "Service",
+        SubCategory: productName,
+        Salesman: salesman.salesman,
+        City: cityResult.city || fallbackCity || state || null,
+        State: state,
+        Tier: classification.tier,
+        CustomerType: classification.customerType,
+
+        // --- internal audit metadata ---
+        _meta: {
+          sourceSystem: "tally",
+          companyId,
+          companyGuid,
+          syncRunId,
+          sourceVoucherId: voucher.sourceVoucherId,
+          sourceVoucherNumber: voucher.sourceVoucherNumber,
+          sourceInventoryEntryId: syntheticEntryId,
+          sourceLedgerId: partyLedger ? partyLedger.sourceObjectId : null,
+          sourceStockItemId: null,
+          sourceFetchedAt: voucher.sourceFetchedAt,
+          voucherDate: voucher.voucherDate,
+          quantity: 1,
+          unit: "Service",
+          rate: salesAmount,
+          rawAddress: cityResult.rawAddress,
+          cityConfidence: cityResult.confidence,
+          classificationSource: classification.source,
+          costCentreName: salesman.costCentreName,
+          isAccountingInvoice: true,
+          dataQuality: [...new Set(rowQuality)]
+        }
+      });
+
       continue;
     }
 
+    // --- Standard inventory-based voucher processing (Item Invoices) ---
     const vKey = voucher.guid || voucher.sourceVoucherId || voucher.sourceObjectId || voucher.voucherNumber || Math.random();
     if (!validSalesVouchers.has(vKey)) validSalesVouchers.set(vKey, voucher);
 

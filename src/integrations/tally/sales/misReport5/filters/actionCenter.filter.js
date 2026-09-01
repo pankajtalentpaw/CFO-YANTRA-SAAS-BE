@@ -4,7 +4,7 @@ const Decimal = require("decimal.js");
 const { toDecimalString } = require("../../../../../utils/financialDecimal");
 
 /**
- * Filter 16: Action Center — Management Protocols & Playbook (Sheet 15-16 / Lens 16)
+ * Filter 16: Action Center - Management Protocols & Playbook (Sheet 15-16 / Lens 16)
  * 100% Dynamic Engine: Generates prioritized management action protocols directly from the computed sales cube.
  */
 function evaluateFilter16_ActionCenter(cube, filters = {}) {
@@ -119,9 +119,11 @@ function evaluateFilter16_ActionCenter(cube, filters = {}) {
     });
   }
 
+  const totalCount = redProtocols.length + amberProtocols.length + greenProtocols.length;
+
   return {
     filterId: 16,
-    filterName: "Action Center — Management Protocols & Playbook",
+    filterName: "Action Center - Management Protocols & Playbook",
     type: "Executive Action",
     ownerQuestion: "What are the exact prioritized management actions leadership must execute across Red, Amber, and Green triggers?",
     summary: `${redProtocols.length} Critical Red, ${amberProtocols.length} Amber Warning, ${greenProtocols.length} Green Growth Protocols`,
@@ -130,7 +132,16 @@ function evaluateFilter16_ActionCenter(cube, filters = {}) {
       amber: amberProtocols,
       green: greenProtocols
     },
-    totalProtocolsCount: redProtocols.length + amberProtocols.length + greenProtocols.length,
+    protocolCounts: {
+      red: redProtocols.length,
+      amber: amberProtocols.length,
+      green: greenProtocols.length,
+      total: totalCount
+    },
+    redProtocols,
+    amberProtocols,
+    greenProtocols,
+    totalProtocolsCount: totalCount,
     redCount: redProtocols.length,
     amberCount: amberProtocols.length,
     greenCount: greenProtocols.length
