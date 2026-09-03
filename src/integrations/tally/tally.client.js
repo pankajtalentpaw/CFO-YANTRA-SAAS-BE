@@ -5,8 +5,27 @@ const { buildProbeXml } = require("./tally.requests");
 const breaker = require("./tally.breaker");
 const { logger } = require("../../utils/logger");
 
-function getTallyUrl(host = env.tally.host, port = env.tally.port) {
-  return `http://${host}:${port}`;
+function getEffectiveConfig() {
+  try {
+    const tallyConfigService = require("../../services/tallyConfig.service");
+    return tallyConfigService.getActiveConfig();
+  } catch (_) {
+    return {
+      tallyHost: env.tally.host,
+      tallyPort: env.tally.port,
+      protocol: "http",
+      timeoutMs: env.tally.timeoutMs,
+      probeTimeoutMs: env.tally.probeTimeoutMs
+    };
+  }
+}
+
+function getTallyUrl(host, port, protocol) {
+  const cfg = getEffectiveConfig();
+  const effectiveHost = host || cfg.tallyHost || env.tally.host;
+  const effectivePort = port || cfg.tallyPort || env.tally.port;
+  const effectiveProto = protocol || cfg.protocol || "http";
+  return `${effectiveProto}://${effectiveHost}:${effectivePort}`;
 }
 
 /**
@@ -15,9 +34,11 @@ function getTallyUrl(host = env.tally.host, port = env.tally.port) {
  * @returns {Promise<{ alive: boolean, statusCode?: number, responseTimeMs: number, error?: string }>}
  */
 async function checkHeartbeat(options = {}) {
-  const host = options.host || env.tally.host;
-  const port = options.port || env.tally.port;
-  const url = getTallyUrl(host, port);
+  const cfg = getEffectiveConfig();
+  const host = options.host || cfg.tallyHost || env.tally.host;
+  const port = options.port || cfg.tallyPort || env.tally.port;
+  const protocol = options.protocol || cfg.protocol || "http";
+  const url = getTallyUrl(host, port, protocol);
   const timeoutMs = options.timeoutMs || 3000;
   // `quick` skips the POST fallback. The caller already knows a POST just timed
   // out, so repeating one only doubles the wait it is trying to report.
@@ -86,10 +107,12 @@ async function checkHeartbeat(options = {}) {
  * Send an XML request with read-only validation (backward compatible helper)
  */
 async function sendXml(xml, options = {}) {
-  const host = options.host || env.tally.host;
-  const port = options.port || env.tally.port;
-  const timeoutMs = options.timeoutMs || env.tally.timeoutMs;
-  const url = getTallyUrl(host, port);
+  const cfg = getEffectiveConfig();
+  const host = options.host || cfg.tallyHost || env.tally.host;
+  const port = options.port || cfg.tallyPort || env.tally.port;
+  const protocol = options.protocol || cfg.protocol || "http";
+  const timeoutMs = options.timeoutMs || cfg.timeoutMs || env.tally.timeoutMs;
+  const url = getTallyUrl(host, port, protocol);
 
   assertReadOnlyXml(xml);
 

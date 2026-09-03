@@ -109,29 +109,40 @@ function handleListenError(error) {
 if (require.main === module) {
   installProcessGuards();
 
-  // Connect the local mirror and start the live auto-sync loop. Both are
-  // optional: connectDatabase() resolves false instead of throwing when
-  // MongoDB is absent, and the sync loop idles until it connects, so the
-  // bridge still serves every route straight from TallyPrime.
+  const http = require("http");
+  const httpServer = http.createServer(app);
+  const { initRealtimeSocket } = require("./services/realtimeSocket.service");
+  const { startCdcEngine, stopCdcEngine } = require("./services/sync/cdcEngine.service");
+
+  initRealtimeSocket(httpServer);
+
+  // Connect the local mirror and start the live auto-sync loop & CDC real-time engine.
+  const { initTallyConfig } = require("./services/tallyConfig.service");
   connectDatabase()
-    .then(() => tallySyncJob.start())
+    .then(async () => {
+      await initTallyConfig();
+      tallySyncJob.start();
+      startCdcEngine();
+    })
     .catch((error) => logger.error({ error: error.message }, "Mirror startup failed - serving from TallyPrime only"));
 
-  const server = app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     console.log(`\n==================================================`);
     console.log(`CFO Yantra Backend Engine running on http://localhost:${PORT}`);
+    console.log(`Real-Time WebSockets active on ws://localhost:${PORT}`);
     console.log(`TallyPrime Target: http://${env.tally.host}:${env.tally.port}`);
     console.log(`==================================================\n`);
   });
 
-  server.on("error", handleListenError);
+  httpServer.on("error", handleListenError);
 
   // Release the port promptly so a restart is not blocked by EADDRINUSE.
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
       console.log(`\n${signal} received, shutting down...`);
       tallySyncJob.stop();
-      server.close(() => {
+      stopCdcEngine();
+      httpServer.close(() => {
         disconnectDatabase().finally(() => process.exit(0));
       });
       // Do not hang forever on a stuck connection.
@@ -141,3 +152,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+

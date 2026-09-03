@@ -103,9 +103,54 @@ async function getMirrorCounts(req, res) {
   return res.json({ success: true, companyId: req.params.companyId, total, counts });
 }
 
+/**
+ * Handle incoming webhook event from Tally TDL (Turbo Mode)
+ */
+async function handleTallyWebhookEvent(req, res) {
+  const { action, guid, voucherNumber, companyId } = req.body || req.query || {};
+  const { runCdcForCompany } = require("../services/sync/cdcEngine.service");
+  const realtimeSocket = require("../services/realtimeSocket.service");
+  const { Voucher, Company } = require("../models");
+
+  if (!action) {
+    return res.status(400).json({ success: false, error: "Missing action in event payload" });
+  }
+
+  // Identify target company
+  let comp = null;
+  if (companyId) {
+    comp = await Company.findOne({ companyId }).lean();
+  }
+  if (!comp) {
+    comp = await Company.findOne({ isOpen: true }).lean() || await Company.findOne().lean();
+  }
+
+  const targetCompanyId = comp ? comp.companyId : (companyId || "UNKNOWN_COMPANY");
+  const targetCompanyName = comp ? (comp.companyName || comp.name) : null;
+
+  if (action === "DELETE" && guid) {
+    // Immediate tombstone
+    await Voucher.updateMany(
+      { companyId: targetCompanyId, "header.guid": guid },
+      { $set: { isDeleted: true, deletedAt: new Date() } }
+    );
+    realtimeSocket.emitVoucherDeleted(targetCompanyId, {
+      guid,
+      voucherNumber: voucherNumber || null
+    });
+  } else if (targetCompanyName) {
+    // Run an instant CDC tick for this company
+    runCdcForCompany(targetCompanyId, targetCompanyName).catch(() => {});
+  }
+
+  return res.json({ success: true, received: { action, guid, voucherNumber } });
+}
+
 module.exports = {
   getSyncStatus,
   runSyncNow,
   getMirroredCompanies,
-  getMirrorCounts
+  getMirrorCounts,
+  handleTallyWebhookEvent
 };
+

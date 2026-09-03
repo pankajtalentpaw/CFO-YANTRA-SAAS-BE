@@ -581,6 +581,104 @@ async function getReconciliationReport(company, options = {}) {
 /**
  * Owner-POV 16-Filter MIS Report #5 (SubCategory x City x Month).
  */
+
+/**
+ * Computes historical benchmark data (Prior 3M, Prior 6M, Prior 12M)
+ * based on the selected fromDate reference.
+ */
+async function computeHistoricalBenchmarkData(company, options = {}, citiesCount = 1) {
+  try {
+    let refDate = null;
+    if (options.fromDate) {
+      const match = String(options.fromDate).match(/^(\d{4})[-/]?(\d{2})[-/]?(\d{2})$/);
+      if (match) {
+        refDate = new Date(Date.UTC(parseInt(match[1], 10), parseInt(match[2], 10) - 1, 1));
+      }
+    }
+
+    let toDateStr, year, month;
+    if (refDate && !isNaN(refDate.getTime())) {
+      year = refDate.getUTCFullYear();
+      month = refDate.getUTCMonth();
+      const prevLastDay = new Date(Date.UTC(year, month, 0));
+      toDateStr = prevLastDay.toISOString().slice(0, 10);
+    } else {
+      const now = new Date();
+      year = now.getUTCFullYear();
+      month = now.getUTCMonth();
+      const prevLastDay = new Date(Date.UTC(year, month, 0));
+      toDateStr = prevLastDay.toISOString().slice(0, 10);
+    }
+
+    const getStart = (monthsBack) => {
+      const d = new Date(Date.UTC(year, month - monthsBack, 1));
+      return d.toISOString().slice(0, 10);
+    };
+
+    const mNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const formatLabel = (d1, d2) => {
+      const p1 = d1.split('-');
+      const p2 = d2.split('-');
+      return mNames[parseInt(p1[1], 10) - 1] + ' ' + p1[0].slice(2) + ' – ' + mNames[parseInt(p2[1], 10) - 1] + ' ' + p2[0].slice(2);
+    };
+
+    const start3M = getStart(3);
+    const start6M = getStart(6);
+    const start12M = getStart(12);
+
+    let histVouchers = [];
+    const histRes = await mirror.readVouchers(company.companyId, { fromDate: start12M, toDate: toDateStr });
+    if (histRes && Array.isArray(histRes.records)) {
+      histVouchers = histRes.records;
+    } else {
+      const vRes = await getVouchers(company, { fromDate: start12M, toDate: toDateStr, includeEntries: false });
+      if (vRes?.records) histVouchers = vRes.records;
+    }
+
+    const normalizeVDate = (d) => {
+      if (!d) return '';
+      const s = String(d).replace(/\D/g, '');
+      if (s.length === 8) return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8);
+      return String(d).slice(0, 10);
+    };
+
+    const sumRange = (sDate, eDate, expectedMonths) => {
+      let sum = 0;
+      const monthSet = new Set();
+      histVouchers.forEach((v) => {
+        const vDate = normalizeVDate(v.date || v.voucherDate || v.Date);
+        if (vDate && vDate >= sDate && vDate <= eDate) {
+          const amt = Number(v.amount || v.totalAmount || v.netAmount || 0);
+          if (Number.isFinite(amt)) sum += amt;
+          monthSet.add(vDate.slice(0, 7));
+        }
+      });
+      const activeMonths = monthSet.size > 0 ? monthSet.size : expectedMonths;
+      const avgMonthly = sum / (activeMonths || 1);
+      const safeCities = Math.max(citiesCount, 1);
+      const avgPerCity = avgMonthly / safeCities;
+      return {
+        fromDate: sDate,
+        toDate: eDate,
+        label: formatLabel(sDate, eDate),
+        totalRevenue: Math.round(sum),
+        monthCount: activeMonths,
+        avgMonthly: Math.round(avgMonthly),
+        avgPerCity: Math.round(avgPerCity)
+      };
+    };
+
+    return {
+      referenceFromDate: options.fromDate || null,
+      prior3M: sumRange(start3M, toDateStr, 3),
+      prior6M: sumRange(start6M, toDateStr, 6),
+      prior12M: sumRange(start12M, toDateStr, 12)
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
 async function getMisReport5(company, options = {}) {
   const [voucherRes, ledgerRes, itemRes, groupRes, ccRes] = await Promise.all([
     getVouchers(company, { fromDate: options.fromDate, toDate: options.toDate, includeEntries: true }),
@@ -610,10 +708,17 @@ async function getMisReport5(company, options = {}) {
     options
   });
 
+  const distinctCitiesCount = report?.metadata?.distinctCities || factResult?.stats?.distinctCitiesCount || 1;
+  const benchmarkHistorical = await computeHistoricalBenchmarkData(company, options, distinctCitiesCount);
+  if (report?.filters?.filter2_cityTotalsReference) {
+    report.filters.filter2_cityTotalsReference.benchmarkHistorical = benchmarkHistorical;
+  }
+
   return {
     available: true,
     companyId: company.companyId,
     companyName: company.name,
+    benchmarkHistorical,
     ...report
   };
 }

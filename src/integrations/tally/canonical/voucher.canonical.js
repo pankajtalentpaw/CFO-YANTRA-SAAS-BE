@@ -7,20 +7,33 @@ const { toIsoDate, parseTallyDate } = require("../../../utils/dates");
 /**
  * Normalize raw voucher document into Canonical Voucher
  */
+function safeString(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    if (v["#text"] !== undefined) return String(v["#text"]).trim();
+    if (v["_"] !== undefined) return String(v["_"]).trim();
+    return "";
+  }
+  return String(v).trim();
+}
+
+/**
+ * Normalize raw voucher document into Canonical Voucher
+ */
 function normalizeCanonicalVoucher(raw, context = {}) {
   if (!raw || typeof raw !== "object") return null;
 
   const sourceCompanyId = context.sourceCompanyId || "UNKNOWN_COMPANY";
   const extractionRunId = context.extractionRunId || `RUN_${Date.now()}`;
 
-  const guid = (raw.GUID || raw.Guid || raw.guid || "").trim();
-  const masterId = raw.MASTERID || raw.MasterId || null;
-  const alterId = raw.ALTERID || raw.AlterId || null;
-  const voucherNumber = (raw.VOUCHERNUMBER || raw.VoucherNumber || raw.vouchernumber || "").trim();
-  const voucherType = (raw.VOUCHERTYPENAME || raw.VoucherTypeName || "Journal").trim();
-  const rawDate = raw.DATE || raw.Date || "";
-  const partyLedgerName = (raw.PARTYLEDGERNAME || raw.PartyLedgerName || "").trim() || null;
-  const narration = (raw.NARRATION || raw.Narration || "").trim() || null;
+  const guid = safeString(raw.GUID || raw.Guid || raw.guid);
+  const masterId = safeString(raw.MASTERID || raw.MasterId) || null;
+  const alterId = safeString(raw.ALTERID || raw.AlterId) || null;
+  const voucherNumber = safeString(raw.VOUCHERNUMBER || raw.VoucherNumber || raw.vouchernumber);
+  const voucherType = safeString(raw.VOUCHERTYPENAME || raw.VoucherTypeName) || "Journal";
+  const rawDate = safeString(raw.DATE || raw.Date);
+  const partyLedgerName = safeString(raw.PARTYLEDGERNAME || raw.PartyLedgerName) || null;
+  const narration = safeString(raw.NARRATION || raw.Narration) || null;
   const isCancelled = parseBooleanField(raw.ISCANCELLED || raw.IsCancelled);
   const isOptional = parseBooleanField(raw.ISOPTIONAL || raw.IsOptional);
 
@@ -38,10 +51,14 @@ function normalizeCanonicalVoucher(raw, context = {}) {
 
   rawLedgerEntries.forEach((entry, idx) => {
     if (!entry || typeof entry !== "object") return;
-    const ledgerName = (entry.LEDGERNAME || entry.LedgerName || "").trim();
-    const rawAmt = entry.AMOUNT || entry.Amount || 0;
-    const isDebit = typeof rawAmt === "number" ? rawAmt < 0 : !String(rawAmt).endsWith("Cr");
-    const numAmt = typeof rawAmt === "number" ? Math.abs(rawAmt) : Math.abs(parseFloat(String(rawAmt).replace(/[^0-9.-]/g, "")) || 0);
+    const ledgerName = safeString(entry.LEDGERNAME || entry.LedgerName);
+    const rawAmt = entry.AMOUNT !== undefined ? entry.AMOUNT : (entry.Amount !== undefined ? entry.Amount : 0);
+    let strAmt = typeof rawAmt === "number" ? "" : safeString(rawAmt);
+    if (strAmt.includes("=")) {
+      strAmt = strAmt.split("=").pop().trim();
+    }
+    const isDebit = typeof rawAmt === "number" ? rawAmt < 0 : !strAmt.endsWith("Cr") && (strAmt.startsWith("-") || !strAmt.endsWith("Dr"));
+    const numAmt = typeof rawAmt === "number" ? Math.abs(rawAmt) : Math.abs(parseFloat(strAmt.replace(/[^0-9.-]/g, "")) || 0);
 
     const lineTotal = toDecimal(numAmt);
     if (isDebit) {
@@ -51,10 +68,15 @@ function normalizeCanonicalVoucher(raw, context = {}) {
     // Bill allocations inside ledger entry
     const rawBills = normalizeArray(entry["BILLALLOCATIONS.LIST"] || entry.BILLALLOCATIONS || []);
     const billAllocations = rawBills.map((b) => ({
-      billName: (b.NAME || b.Name || "").trim(),
-      billType: (b.BILLTYPE || b.BillType || "Agst Ref").trim(),
-      amount: toDecimalString(Math.abs(parseFloat(String(b.AMOUNT || b.Amount || 0).replace(/[^0-9.-]/g, "")) || 0))
+      billName: safeString(b.NAME || b.Name),
+      billType: safeString(b.BILLTYPE || b.BillType) || "Agst Ref",
+      amount: (() => {
+        let bStr = safeString(b.AMOUNT !== undefined ? b.AMOUNT : b.Amount);
+        if (bStr.includes("=")) bStr = bStr.split("=").pop().trim();
+        return toDecimalString(Math.abs(parseFloat(bStr.replace(/[^0-9.-]/g, "")) || 0));
+      })()
     }));
+
 
     ledgerEntries.push({
       lineIndex: idx + 1,

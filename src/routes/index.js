@@ -8,6 +8,8 @@ const syncRoutes = require("./syncRoutes");
 const cloudRoutes = require("./cloudRoutes");
 const authRoutes = require("./authRoutes");
 
+const settingsRoutes = require("./settingsRoutes");
+
 // Health
 router.get("/health", (req, res) => {
   res.json({
@@ -20,6 +22,7 @@ router.get("/health", (req, res) => {
 
 // Mounted Routes
 router.use("/auth", authRoutes);
+router.use("/settings", settingsRoutes);
 router.use("/tally", tallyRoutes);
 router.use("/companies", companiesRoutes);
 router.use("/diagnostics", diagnosticsRoutes);

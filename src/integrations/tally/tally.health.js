@@ -13,10 +13,17 @@ const env = require("../../config/env");
  */
 async function probeTally(options = {}) {
   const startedAt = Date.now();
-  const companyName = options.companyName || env.tally.companyName;
+  let dynamicConfig = null;
+  try {
+    const tallyConfigService = require("../../services/tallyConfig.service");
+    dynamicConfig = tallyConfigService.getActiveConfig();
+  } catch (_) {}
+
+  const companyName = options.companyName !== undefined ? options.companyName : (dynamicConfig ? dynamicConfig.targetCompany : env.tally.companyName);
+  const probeTimeout = dynamicConfig ? dynamicConfig.probeTimeoutMs : env.tally.probeTimeoutMs;
   // A health check is not a data extraction. Capping it at the probe budget is
   // what keeps the status endpoint from out-waiting the caller that asked.
-  const probeOptions = { timeoutMs: env.tally.probeTimeoutMs, ...options };
+  const probeOptions = { timeoutMs: probeTimeout, ...options };
 
   try {
     const probeXml = buildProbeXml(companyName);

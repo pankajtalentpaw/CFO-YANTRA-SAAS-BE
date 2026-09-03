@@ -127,7 +127,8 @@ function normalizeCanonicalLedger(raw, context = {}) {
     : raw.ClosingBalance !== undefined ? raw.ClosingBalance : undefined;
   let closingBalance = null;
   if (rawClosing !== undefined && rawClosing !== null && String(rawClosing).trim() !== "") {
-    const text = String(rawClosing).trim();
+    let text = String(rawClosing).trim();
+    if (text.includes("=")) text = text.split("=").pop().trim();
     const magnitude = Math.abs(parseFloat(text.replace(/[^0-9.-]/g, "")) || 0);
     closingBalance = {
       amount: toDecimalString(magnitude),

@@ -240,7 +240,8 @@ const NO_STATE_LABEL = "(no state)";
  * @param {number} [options.recentLimit]
  */
 async function getDashboard(company, options = {}) {
-  const { topN = 7, recentLimit = 8 } = options;
+  const { topN = 7, recentLimit } = options;
+
 
   // No date bounds: deliberately the whole register, so this shares the cache
   // entry the other company pages already populated, and so the
@@ -463,7 +464,7 @@ async function getDashboard(company, options = {}) {
         amount: toDecimalString(current[flow].amount)
       }))
       .filter((entry) => entry.count > 0),
-    recentVouchers: recent.slice(0, recentLimit),
+    recentVouchers: recentLimit ? recent.slice(0, recentLimit) : recent,
     coverage: {
       registerCount: register.records.length,
       periodCount: Object.values(current).reduce((sum, entry) => sum + entry.count, 0),

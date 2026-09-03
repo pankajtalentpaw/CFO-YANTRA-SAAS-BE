@@ -1,0 +1,20 @@
+;; ====================================================================
+;; CFO Yantra Real-Time Event Hook for TallyPrime (Turbo Mode)
+;; Load in Tally Prime: F1 (Help) -> TDLs & Add-ons -> F4 (Manage Local TDLs)
+;; ====================================================================
+
+[#Form: Voucher]
+    On: Form Accept: Yes: Call: CFONotifyVoucherSave
+    On: Form Delete: Yes: Call: CFONotifyVoucherDelete
+
+[Function: CFONotifyVoucherSave]
+    00: Call: CFOTriggerWebhook: "UPSERT"
+
+[Function: CFONotifyVoucherDelete]
+    00: Call: CFOTriggerWebhook: "DELETE"
+
+[Function: CFOTriggerWebhook]
+    Parameter: pAction: String
+    00: Set: vGuid: $Guid
+    01: Set: vVchNo: $VoucherNumber
+    02: HTTP-Post: "http://127.0.0.1:5000/api/v1/sync/tally-event": ("action=" + ##pAction + "&guid=" + ##vGuid + "&voucherNumber=" + ##vVchNo)

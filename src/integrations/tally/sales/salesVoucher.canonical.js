@@ -28,7 +28,15 @@ function toSignedAmount(rawAmount) {
   if (typeof rawAmount === "number") return toDecimal(rawAmount);
   // Tally sends amounts as typed nodes: { "#text": "-129800.00", "@_TYPE": "Amount" }.
   // String() on that yields "[object Object]" and parses to zero, so flatten first.
-  const text = String(extractValue(rawAmount) ?? "").trim();
+  let text = String(extractValue(rawAmount) ?? "").trim();
+  if (!text) return toDecimal(0);
+
+  // In multi-currency transactions, Tally returns the base ledger amount after '=':
+  // e.g. "-$700.00 @ ? 91.73/$ = -? 64211.00"
+  if (text.includes("=")) {
+    text = text.split("=").pop().trim();
+  }
+
   const magnitude = Math.abs(parseFloat(text.replace(/[^0-9.-]/g, "")) || 0);
   const isCredit = /cr\s*$/i.test(text) || text.startsWith("-");
   return toDecimal(isCredit ? -magnitude : magnitude);
