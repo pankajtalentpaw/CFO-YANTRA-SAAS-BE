@@ -71,7 +71,8 @@ describe("Every request defines the collection it asks for", () => {
     buildGodownsRequest: () => requests.buildGodownsRequest("Acme Ltd"),
     buildVouchersRequest: () => requests.buildVouchersRequest("Acme Ltd", "20240401", null),
     buildBillWiseOutstandingRequest: () => requests.buildBillWiseOutstandingRequest("Acme Ltd"),
-    buildIncrementalSyncRequest: () => requests.buildIncrementalSyncRequest("Acme Ltd", 5)
+    buildIncrementalSyncRequest: () => requests.buildIncrementalSyncRequest("Acme Ltd", 5),
+    buildLightweightVoucherKeysRequest: () => requests.buildLightweightVoucherKeysRequest("Acme Ltd")
   };
 
   for (const [label, build] of Object.entries(samples)) {

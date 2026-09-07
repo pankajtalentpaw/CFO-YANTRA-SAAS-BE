@@ -429,8 +429,12 @@ function buildBillWiseOutstandingRequest(companyName) {
  * EXP-08: Incremental Sync Request using AlterID Cursor
  * Uses FETCH for high performance extraction of inserted/altered vouchers.
  */
+/**
+ * EXP-08: Incremental Sync Request using AlterID Cursor
+ * Uses FETCH for high performance extraction of inserted/altered vouchers.
+ */
 function buildIncrementalSyncRequest(companyName, lastAlterId = 0, options = {}) {
-  const { includeLedgerEntries = true, includeInventoryEntries = true, fromDate = "19000101", toDate = "20991231" } = options;
+  const { includeLedgerEntries = true, includeInventoryEntries = true, fromDate, toDate } = options;
 
   const fetches = [
     "Date",
@@ -449,6 +453,10 @@ function buildIncrementalSyncRequest(companyName, lastAlterId = 0, options = {})
   if (includeInventoryEntries) fetches.push("AllInventoryEntries.*");
 
   const fetchesXml = fetches.map((f) => `            <FETCH>${escapeXml(f)}</FETCH>`).join("\n");
+  const dateVars = [
+    fromDate ? `        <SVFROMDATE TYPE="Date">${escapeXml(fromDate)}</SVFROMDATE>` : "",
+    toDate ? `        <SVTODATE TYPE="Date">${escapeXml(toDate)}</SVTODATE>` : ""
+  ].filter(Boolean).join("\n");
 
   return `
 <ENVELOPE>
@@ -463,9 +471,7 @@ function buildIncrementalSyncRequest(companyName, lastAlterId = 0, options = {})
       <STATICVARIABLES>
         <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
         ${companyName ? `<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>` : ""}
-        <SVFROMDATE TYPE="Date">${escapeXml(fromDate)}</SVFROMDATE>
-        <SVTODATE TYPE="Date">${escapeXml(toDate)}</SVTODATE>
-      </STATICVARIABLES>
+${dateVars ? dateVars + "\n" : ""}      </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
           <COLLECTION NAME="IncrementalVoucherCollection" ISMODIFY="No">
@@ -485,9 +491,14 @@ ${fetchesXml}
 
 /**
  * Lightweight Voucher Keys Request for high-speed Change Data Capture & Deletion Detection
- * Returns solely identifiers (~100-200ms even on 20,000+ vouchers across entire books period).
+ * Returns solely identifiers (~100-200ms even on 20,000+ vouchers across books period).
  */
-function buildLightweightVoucherKeysRequest(companyName, fromDate = "19000101", toDate = "20991231") {
+function buildLightweightVoucherKeysRequest(companyName, fromDate = null, toDate = null) {
+  const dateVars = [
+    fromDate ? `        <SVFROMDATE TYPE="Date">${escapeXml(fromDate)}</SVFROMDATE>` : "",
+    toDate ? `        <SVTODATE TYPE="Date">${escapeXml(toDate)}</SVTODATE>` : ""
+  ].filter(Boolean).join("\n");
+
   return `
 <ENVELOPE>
   <HEADER>
@@ -501,9 +512,7 @@ function buildLightweightVoucherKeysRequest(companyName, fromDate = "19000101", 
       <STATICVARIABLES>
         <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
         ${companyName ? `<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>` : ""}
-        <SVFROMDATE TYPE="Date">${escapeXml(fromDate)}</SVFROMDATE>
-        <SVTODATE TYPE="Date">${escapeXml(toDate)}</SVTODATE>
-      </STATICVARIABLES>
+${dateVars ? dateVars + "\n" : ""}      </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
           <COLLECTION NAME="LightweightVoucherKeysCollection" ISMODIFY="No">

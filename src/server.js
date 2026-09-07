@@ -80,6 +80,11 @@ app.use((err, req, res, next) => {
  * A single bad Tally response must not take the whole backend down.
  */
 function installProcessGuards() {
+  if (process.env.ELECTRON_RUN_AS_NODE === "1") {
+    process.on("disconnect", () => {
+      process.exit(0);
+    });
+  }
   process.on("unhandledRejection", (reason) => {
     logger.error(
       { reason: reason instanceof Error ? reason.message : String(reason) },
