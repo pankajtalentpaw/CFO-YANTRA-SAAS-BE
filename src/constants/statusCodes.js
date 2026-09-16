@@ -71,11 +71,6 @@ const APP_ERROR_CODES = Object.freeze({
   DB_SYNC_FAILED: "DB_SYNC_FAILED",
   DB_MIRROR_UNAVAILABLE: "DB_MIRROR_UNAVAILABLE",
 
-  // External / AI Engine Errors
-  AI_SERVICE_UNAVAILABLE: "AI_SERVICE_UNAVAILABLE",
-  AI_API_KEY_INVALID: "AI_API_KEY_INVALID",
-  AI_RATE_LIMIT: "AI_RATE_LIMIT",
-
   // Internal System Errors
   INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",
   UNHANDLED_EXCEPTION: "UNHANDLED_EXCEPTION"
@@ -173,14 +168,6 @@ const ERROR_PLAN = Object.freeze({
     diagnosticHint: "An error occurred while writing mirrored company records to MongoDB collections.",
     actionPlan: "Inspect sync log details in /api/sync/status. Check MongoDB schema and collection write locks.",
     userAction: "Trigger manual sync from Settings > Sync or wait for the next scheduled auto-sync tick."
-  },
-  [APP_ERROR_CODES.AI_SERVICE_UNAVAILABLE]: {
-    httpStatus: HTTP_STATUS.SERVICE_UNAVAILABLE,
-    severity: "MEDIUM",
-    retryable: true,
-    diagnosticHint: "OpenAI API request failed, API key is missing, or network timed out.",
-    actionPlan: "Verify OPENAI_API_KEY in .env. Engine falls back to local deterministic rule-based analysis.",
-    userAction: "AI features will use offline rule-based financial models until OpenAI connectivity is restored."
   },
   [APP_ERROR_CODES.INTERNAL_SERVER_ERROR]: {
     httpStatus: HTTP_STATUS.INTERNAL_SERVER_ERROR,

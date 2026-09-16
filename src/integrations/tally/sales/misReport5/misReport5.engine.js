@@ -333,7 +333,11 @@ function generateMisReport5(input = {}) {
   };
 }
 
+// resolveCity is exported for the analytics layer, which must place rows on the
+// same canonical city names this engine uses. Duplicating CANONICAL_CITIES there
+// would let two views of the same data drift apart.
 module.exports = {
   buildMisCube,
-  generateMisReport5
+  generateMisReport5,
+  resolveCity
 };

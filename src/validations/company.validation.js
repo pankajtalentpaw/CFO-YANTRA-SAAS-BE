@@ -43,11 +43,25 @@ const dashboardQuerySchema = z.object({
 const report5QuerySchema = z.object({
   fromDate: dateYyyymmdd.optional(),
   toDate: dateYyyymmdd.optional(),
-  filterId: z.coerce.number().int().min(1).max(16).optional(),
+  filterId: z.coerce.number().int().min(0).max(17).optional(),
   subCatA: z.string().max(200).optional(),
   subCatB: z.string().max(200).optional(),
   monthA: z.string().max(50).optional(),
   monthB: z.string().max(50).optional()
+});
+
+// Decision Intelligence Layer (160 Analyses) query schema
+const report5AnalyticsQuerySchema = z.object({
+  fromDate: dateYyyymmdd.optional(),
+  toDate: dateYyyymmdd.optional(),
+  lensId: z.coerce.number().int().min(1).max(16).optional(),
+  analysisId: z.string().regex(/^L\d{2}\.A\d{2}$/).optional()
+});
+
+// Decision Intelligence Dashboards query schema
+const report5DashboardsQuerySchema = z.object({
+  fromDate: dateYyyymmdd.optional(),
+  toDate: dateYyyymmdd.optional()
 });
 
 module.exports = {
@@ -57,5 +71,7 @@ module.exports = {
   purchaseAnalysisQuerySchema,
   dashboardQuerySchema,
   report5QuerySchema,
+  report5AnalyticsQuerySchema,
+  report5DashboardsQuerySchema,
   filterStringOrArray
 };

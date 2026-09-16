@@ -1,4 +1,3 @@
-const aiController = require("./aiController");
 const cloudController = require("./cloudController");
 const companiesController = require("./companiesController");
 const diagnosticsController = require("./diagnosticsController");
@@ -8,7 +7,6 @@ const syncController = require("./syncController");
 const tallyController = require("./tallyController");
 
 module.exports = {
-  aiController,
   cloudController,
   companiesController,
   diagnosticsController,

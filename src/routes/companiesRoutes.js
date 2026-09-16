@@ -34,9 +34,13 @@ router.get("/:companyId/reconciliation-report", c.getReconciliationReport);
 router.get("/:companyId/reports/report5", c.getMisReport5);
 router.get("/:companyId/mis-report-5", c.getMisReport5);
 
-const { aiRoutes } = require("./aiRoutes");
+// Decision Intelligence Layer (160 Analyses)
+router.get("/reports/report5/analytics/catalog", c.getReport5AnalyticsIndex);
+router.get("/:companyId/reports/report5/analytics/catalog", c.getReport5AnalyticsIndex);
+router.get("/:companyId/reports/report5/analytics/dashboards", c.getReport5AnalyticsDashboards);
+router.get("/:companyId/reports/report5/analytics/verification", c.getReport5AnalyticsVerification);
+router.get("/:companyId/reports/report5/analytics", c.getReport5Analytics);
 
-// AI Virtual CFO & Financial Intelligence
-router.use("/:companyId/ai", aiRoutes);
+
 
 module.exports = router;

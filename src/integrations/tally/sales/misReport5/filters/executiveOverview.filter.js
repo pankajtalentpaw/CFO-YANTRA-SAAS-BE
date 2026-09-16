@@ -174,7 +174,7 @@ function evaluateFilter0_ExecutiveOverview(cube, filters = {}) {
   const comboList = [];
   for (const c of cities) {
     for (const p of subCategories) {
-      const rev = (cube.citySubCategoryMatrix?.get(c)?.get(p)) || new Decimal(0);
+      const rev = (cube.subCategoryCityMatrix?.get(p)?.get(c)) || new Decimal(0);
       if (rev.greaterThan(0)) {
         comboList.push({ combo: `${p} - ${c}`, revenue: rev.toNumber() });
       }

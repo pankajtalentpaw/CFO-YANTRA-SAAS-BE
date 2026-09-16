@@ -1,4 +1,3 @@
-const aiAnalysisService = require("./aiAnalysisService");
 const companyDataService = require("./companyDataService");
 const companyScopeService = require("./companyScopeService");
 const dashboardService = require("./dashboardService");
@@ -11,7 +10,6 @@ const spoolService = require("./spoolService");
 const spoolCryptoService = require("./spoolCryptoService");
 
 module.exports = {
-  aiAnalysisService,
   companyDataService,
   companyScopeService,
   dashboardService,

@@ -8,6 +8,7 @@
 
 const { listCompanies, resolveCompany, paginate } = require("../services/companyScope.service");
 const service = require("../services/companyData.service");
+const analyticsService = require("../services/report5Analytics.service");
 const dashboardService = require("../services/dashboard.service");
 const { calculateVoucherLedgerBreakdown } = require("../integrations/tally/canonical/accountingAnalysis.engine");
 const {
@@ -17,6 +18,8 @@ const {
   purchaseAnalysisQuerySchema,
   dashboardQuerySchema,
   report5QuerySchema,
+  report5AnalyticsQuerySchema,
+  report5DashboardsQuerySchema,
   filterStringOrArray
 } = require("../validations");
 
@@ -493,6 +496,73 @@ const getMisReport5 = withCompany(async (req, res, company) => {
   });
 });
 
+const getReport5AnalyticsIndex = (req, res) => {
+  const result = analyticsService.getAnalyticsIndex();
+  return res.json({
+    success: true,
+    ...result
+  });
+};
+
+const getReport5Analytics = withCompany(async (req, res, company) => {
+  const query = parseQuery(report5AnalyticsQuerySchema, req, res);
+  if (!query) return;
+
+  const result = await analyticsService.getAnalyticsForLens(company, {
+    fromDate: query.fromDate,
+    toDate: query.toDate,
+    lensId: query.lensId,
+    analysisId: query.analysisId
+  });
+
+  if (!result || !result.available) {
+    return res.status(502).json({ success: false, available: false, reason: result && result.reason });
+  }
+
+  return res.json({
+    success: true,
+    ...result
+  });
+});
+
+const getReport5AnalyticsDashboards = withCompany(async (req, res, company) => {
+  const query = parseQuery(report5DashboardsQuerySchema, req, res);
+  if (!query) return;
+
+  const result = await analyticsService.getAnalyticsDashboards(company, {
+    fromDate: query.fromDate,
+    toDate: query.toDate
+  });
+
+  if (!result || !result.available) {
+    return res.status(502).json({ success: false, available: false, reason: result && result.reason });
+  }
+
+  return res.json({
+    success: true,
+    ...result
+  });
+});
+
+const getReport5AnalyticsVerification = withCompany(async (req, res, company) => {
+  const query = parseQuery(report5DashboardsQuerySchema, req, res);
+  if (!query) return;
+
+  const result = await analyticsService.getAnalyticsVerification(company, {
+    fromDate: query.fromDate,
+    toDate: query.toDate
+  });
+
+  if (!result || !result.available) {
+    return res.status(502).json({ success: false, available: false, reason: result && result.reason });
+  }
+
+  return res.json({
+    success: true,
+    ...result
+  });
+});
+
 const getVoucher = withCompany(async (req, res, company) => {
   const result = await service.getVoucherById(company, req.params.voucherId);
   if (!result.available) {
@@ -565,6 +635,10 @@ module.exports = {
   getDashboard,
   getReconciliationReport,
   getMisReport5,
+  getReport5AnalyticsIndex,
+  getReport5Analytics,
+  getReport5AnalyticsDashboards,
+  getReport5AnalyticsVerification,
   getParties,
   getReadiness,
   summarizeItems

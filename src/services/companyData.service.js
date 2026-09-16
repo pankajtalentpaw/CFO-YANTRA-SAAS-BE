@@ -679,36 +679,59 @@ async function computeHistoricalBenchmarkData(company, options = {}, citiesCount
   }
 }
 
+async function getFactSalesContext(company, options = {}) {
+  const from = options.fromDate || "";
+  const to = options.toDate || "";
+  const key = `${company.companyId}::factSalesContext::${from}::${to}`;
+
+  return cached(key, async () => {
+    const [voucherRes, ledgerRes, itemRes, groupRes, ccRes] = await Promise.all([
+      getVouchers(company, { fromDate: options.fromDate, toDate: options.toDate, includeEntries: true }),
+      getDomain(company, "ledgers"),
+      getDomain(company, "stockItems"),
+      getDomain(company, "stockGroups"),
+      getDomain(company, "costCentres")
+    ]);
+
+    if (!voucherRes.available) {
+      return { available: false, reason: voucherRes.reason };
+    }
+
+    const factResult = buildFactSales({
+      companyId: company.companyId,
+      companyGuid: company.guid || null,
+      salesVouchers: voucherRes.records || [],
+      ledgers: (ledgerRes && ledgerRes.records) || [],
+      stockItems: (itemRes && itemRes.records) || [],
+      stockGroups: (groupRes && groupRes.records) || [],
+      costCentres: (ccRes && ccRes.records) || [],
+      costCentresEnabled: ccRes && ccRes.available
+    });
+
+    return {
+      available: true,
+      companyId: company.companyId,
+      companyGuid: company.guid || null,
+      companyName: company.name,
+      factResult,
+      rawVouchers: voucherRes.records || [],
+      options
+    };
+  }, DEFAULT_TTL_MS);
+}
+
 async function getMisReport5(company, options = {}) {
-  const [voucherRes, ledgerRes, itemRes, groupRes, ccRes] = await Promise.all([
-    getVouchers(company, { fromDate: options.fromDate, toDate: options.toDate, includeEntries: true }),
-    getDomain(company, "ledgers"),
-    getDomain(company, "stockItems"),
-    getDomain(company, "stockGroups"),
-    getDomain(company, "costCentres")
-  ]);
-
-  if (!voucherRes.available) return { available: false, reason: voucherRes.reason };
-
-  const factResult = buildFactSales({
-    companyId: company.companyId,
-    companyGuid: company.guid || null,
-    salesVouchers: voucherRes.records || [],
-    ledgers: (ledgerRes && ledgerRes.records) || [],
-    stockItems: (itemRes && itemRes.records) || [],
-    stockGroups: (groupRes && groupRes.records) || [],
-    costCentres: (ccRes && ccRes.records) || [],
-    costCentresEnabled: ccRes && ccRes.available
-  });
+  const context = await getFactSalesContext(company, options);
+  if (!context.available) return { available: false, reason: context.reason };
 
   const report = generateMisReport5({
-    factSalesRows: factResult.rows || [],
-    factStats: factResult.stats || {},
-    rawVouchers: voucherRes.records || [],
+    factSalesRows: context.factResult.rows || [],
+    factStats: context.factResult.stats || {},
+    rawVouchers: context.rawVouchers || [],
     options
   });
 
-  const distinctCitiesCount = report?.metadata?.distinctCities || factResult?.stats?.distinctCitiesCount || 1;
+  const distinctCitiesCount = report?.metadata?.distinctCities || context.factResult?.stats?.distinctCitiesCount || 1;
   const benchmarkHistorical = await computeHistoricalBenchmarkData(company, options, distinctCitiesCount);
   if (report?.filters?.filter2_cityTotalsReference) {
     report.filters.filter2_cityTotalsReference.benchmarkHistorical = benchmarkHistorical;
@@ -837,6 +860,7 @@ module.exports = {
   getPurchaseAnalysis,
   getReconciliationReport,
   getMisReport5,
+  getFactSalesContext,
   getVoucherTypeResolver,
   getParties,
   getOverview,
