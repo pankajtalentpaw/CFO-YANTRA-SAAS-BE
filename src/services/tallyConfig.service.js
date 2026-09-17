@@ -21,11 +21,11 @@ let activeConfig = {
 let initialized = false;
 
 /**
- * Initialize dynamic configuration from MongoDB on application startup.
+ * Initialize dynamic configuration from SQL database on application startup.
  */
 async function initTallyConfig() {
   try {
-    const doc = await SystemSettings.findOne({ key: "TALLY_CONFIG" }).lean();
+    const doc = await SystemSettings.findByPk("TALLY_CONFIG", { raw: true });
     if (doc) {
       activeConfig = {
         ...activeConfig,
@@ -45,11 +45,11 @@ async function initTallyConfig() {
       };
       logger.info(
         { host: activeConfig.tallyHost, port: activeConfig.tallyPort, company: activeConfig.targetCompany },
-        "Loaded dynamic Tally configuration from MongoDB"
+        "Loaded dynamic Tally configuration from database"
       );
     } else {
       // Seed initial record from environment variables
-      await SystemSettings.create({
+      await SystemSettings.upsert({
         key: "TALLY_CONFIG",
         tallyHost: activeConfig.tallyHost,
         tallyPort: activeConfig.tallyPort,
@@ -61,11 +61,11 @@ async function initTallyConfig() {
         autoSyncEnabled: activeConfig.autoSyncEnabled,
         syncIntervalMs: activeConfig.syncIntervalMs
       });
-      logger.info("Initialized default Tally configuration in MongoDB");
+      logger.info("Initialized default Tally configuration in database");
     }
     initialized = true;
   } catch (err) {
-    logger.warn({ error: err.message }, "Could not load Tally configuration from MongoDB; using .env defaults");
+    logger.warn({ error: err.message }, "Could not load Tally configuration from database; using .env defaults");
   }
 }
 
@@ -77,7 +77,7 @@ function getActiveConfig() {
 }
 
 /**
- * Save updated Tally configuration to MongoDB and hot-reload in memory.
+ * Save updated Tally configuration to database and hot-reload in memory.
  */
 async function updateTallyConfig(updates = {}) {
   const patch = {};
@@ -116,12 +116,13 @@ async function updateTallyConfig(updates = {}) {
     if (!isNaN(ms) && ms >= 10000) patch.syncIntervalMs = ms;
   }
 
-  // Update in MongoDB
-  const updatedDoc = await SystemSettings.findOneAndUpdate(
-    { key: "TALLY_CONFIG" },
-    { $set: patch },
-    { upsert: true, new: true, runValidators: true }
-  ).lean();
+  // Update in SQL Database
+  const existingConfig = await SystemSettings.findByPk("TALLY_CONFIG");
+  if (existingConfig) {
+    await existingConfig.update(patch);
+  } else {
+    await SystemSettings.create({ key: "TALLY_CONFIG", ...activeConfig, ...patch });
+  }
 
   // Update in-memory cache
   activeConfig = {
@@ -149,18 +150,19 @@ async function recordConnectionStatus({ status, responseTimeMs, activeCompanies 
   }
 
   try {
-    await SystemSettings.updateOne(
-      { key: "TALLY_CONFIG" },
-      {
-        $set: {
-          lastKnownStatus: status,
-          lastResponseTimeMs: responseTimeMs,
-          ...(status === "ONLINE" ? { lastConnectedAt: activeConfig.lastConnectedAt, activeCompanies } : {})
-        }
-      }
-    );
+    const existingConfig = await SystemSettings.findByPk("TALLY_CONFIG");
+    const patch = {
+      lastKnownStatus: status,
+      lastResponseTimeMs: responseTimeMs,
+      ...(status === "ONLINE" ? { lastConnectedAt: activeConfig.lastConnectedAt, activeCompanies } : {})
+    };
+    if (existingConfig) {
+      await existingConfig.update(patch);
+    } else {
+      await SystemSettings.create({ key: "TALLY_CONFIG", ...activeConfig, ...patch });
+    }
   } catch (err) {
-    logger.warn({ error: err.message }, "Failed to record connection status to MongoDB");
+    logger.warn({ error: err.message }, "Failed to record connection status to database");
   }
 }
 

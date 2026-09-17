@@ -125,7 +125,25 @@ function resolveCity(row) {
   return clean.split(/[\s-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }
 
-function buildMisCube(rows) {
+/**
+ * What one fact row contributes, in the measure being read.
+ *
+ * "withCharges" counts the row's share of GST and ledger charges; anything else
+ * counts product value alone. Rows built before the builder carried the pair —
+ * and the fixtures in the MIS tests — hold only SalesAmount, so that is the
+ * fallback rather than a zero.
+ */
+function rowAmountFor(row, measure) {
+  if (measure === "withCharges") {
+    const gross = row.SalesAmountWithCharges;
+    if (gross !== undefined && gross !== null && gross !== "") return gross;
+  }
+  return row.SalesAmount;
+}
+
+function buildMisCube(rows, options = {}) {
+  const measure = options.measure === "withCharges" ? "withCharges" : "withoutCharges";
+
   const subCategorySet = new Set();
   const citySet = new Set();
   const monthMap = new Map();
@@ -142,7 +160,7 @@ function buildMisCube(rows) {
   for (const row of rows) {
     if (!row || !row.SalesAmount) continue;
 
-    const amt = toDecimal(row.SalesAmount);
+    const amt = toDecimal(rowAmountFor(row, measure));
     if (amt.isZero()) continue;
 
     const subCat = (row.SubCategory || "Uncategorized").trim();
@@ -195,6 +213,7 @@ function buildMisCube(rows) {
 
   return {
     rows,
+    measure,
     totalRevenue,
     cities,
     subCategories,
@@ -218,7 +237,10 @@ function generateMisReport5(input = {}) {
   }
   rows = rows || [];
 
-  const cube = buildMisCube(rows);
+  // Every filter, lens and headline below reads this one cube, so the measure is
+  // chosen once here and the whole report follows it.
+  const measure = options.measure === "withCharges" ? "withCharges" : "withoutCharges";
+  const cube = buildMisCube(rows, { measure });
 
   let grossTotal = new Decimal(0);
   if (factStats && factStats.grossVoucherTotal) {
@@ -240,7 +262,10 @@ function generateMisReport5(input = {}) {
     grossTotal = cube.totalRevenue;
   }
 
-  const netRevenueDec = cube.totalRevenue;
+  // The headline pair has to name the same two figures whichever measure the
+  // cube was built in, so the product-only total is summed from the rows rather
+  // than read off a cube that may itself already be carrying the charges.
+  const netRevenueDec = rows.reduce((sum, row) => sum.plus(toDecimal((row && row.SalesAmount) || 0)), new Decimal(0));
   const grossRevenueDec = grossTotal.greaterThanOrEqualTo(netRevenueDec) ? grossTotal : netRevenueDec;
   const chargesAndGstDec = grossRevenueDec.minus(netRevenueDec);
 
@@ -301,7 +326,12 @@ function generateMisReport5(input = {}) {
       reportCode: "MIS_REPORT_5",
       reportTitle: "Owner-POV Filter Library — Product × City × Month MIS",
       grain: "Product × City × Month",
-      totalRevenue: toDecimalString(netRevenueDec),
+      // totalRevenue is the measure the caller asked for — what every chart and
+      // lens in this payload was computed in. netRevenue and grossRevenue are
+      // the fixed pair either side of it, so the toggle can state both.
+      totalRevenue: toDecimalString(cube.totalRevenue),
+      measure,
+      netRevenue: toDecimalString(netRevenueDec),
       grossRevenue: toDecimalString(grossRevenueDec),
       chargesAndGst: toDecimalString(chargesAndGstDec),
       recordCount: rows.length,
@@ -312,7 +342,9 @@ function generateMisReport5(input = {}) {
       generatedAt: new Date().toISOString()
     },
     executiveSummary: {
-      totalRevenue: toDecimalString(netRevenueDec),
+      totalRevenue: toDecimalString(cube.totalRevenue),
+      measure,
+      netRevenue: toDecimalString(netRevenueDec),
       grossRevenue: toDecimalString(grossRevenueDec),
       chargesAndGst: toDecimalString(chargesAndGstDec),
       cityTrendHeadline: filter1.summary,

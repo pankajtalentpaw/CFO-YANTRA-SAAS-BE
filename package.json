@@ -25,6 +25,11 @@
     "experiment:09": "node src/scripts/experiment09.js",
     "experiment:10": "node src/scripts/experiment10.js"
   },
+  "jest": {
+    "setupFiles": [
+      "<rootDir>/tests/setupTestEnv.js"
+    ]
+  },
   "keywords": [
     "tally",
     "cfo-yantra",
@@ -42,9 +47,12 @@
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "fast-xml-parser": "^5.11.0",
-    "mongoose": "^9.9.3",
+    "pg": "^8.23.0",
+    "pg-hstore": "^2.3.4",
     "pino": "^10.3.1",
+    "sequelize": "^6.37.8",
     "socket.io": "^4.8.3",
+    "sqlite3": "^6.0.1",
     "uuid": "^14.0.1",
     "zod": "^4.4.3"
   },

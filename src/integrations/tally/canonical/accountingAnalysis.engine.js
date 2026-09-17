@@ -324,6 +324,11 @@ function normalizeVoucherAnalysis(voucher, context = {}) {
   const hasInventory = inventoryLines.length > 0;
 
   let itemValue = new Decimal(0);
+  // Base revenue with GST, freight and every other ledger charge stripped out.
+  // Equal to itemValue on an item invoice; on an accounting invoice, which has no
+  // stock lines, it is the base ledger amount — a figure itemValue never counts.
+  // Both branches below set it, so it is never read unassigned.
+  let netValue;
   let itemQuantity = 0;
   const detailRows = [];
 
@@ -379,6 +384,8 @@ function normalizeVoucherAnalysis(voucher, context = {}) {
         isReturn
       });
     }
+
+    netValue = itemValue;
   } else {
     // Voucher with no stock lines (service / accounting voucher)
     let baseLedgerName = null;
@@ -403,6 +410,7 @@ function normalizeVoucherAnalysis(voucher, context = {}) {
       ledgerBreakdown.additionalCharges.plus(ledgerBreakdown.roundOff).minus(ledgerBreakdown.discount)
     );
     const lineTotal = signedBase.plus(lineGst).plus(lineCharges);
+    netValue = signedBase;
 
     detailRows.push({
       date: voucher.voucherDate,
@@ -445,6 +453,7 @@ function normalizeVoucherAnalysis(voucher, context = {}) {
     rawVoucherAmount,
     invoicedValue,
     itemValue,
+    netValue,
     itemQuantity,
     taxBreakdown: {
       cgst: sign.times(ledgerBreakdown.cgst),
@@ -640,6 +649,11 @@ function runAccountingAnalysis({
   let grossValue = new Decimal(0);
   let returnsValue = new Decimal(0);
   let itemValue = new Decimal(0);
+  // The "without charges" counterpart of invoicedValue. Every bucket below carries
+  // the same pair, so a reader switching the measure never mixes two definitions.
+  let netValue = new Decimal(0);
+  let itemGrossValue = new Decimal(0);
+  let itemNetValue = new Decimal(0);
   let totalCgst = new Decimal(0);
   let totalSgst = new Decimal(0);
   let totalIgst = new Decimal(0);
@@ -672,6 +686,7 @@ function runAccountingAnalysis({
     }
 
     itemValue = itemValue.plus(norm.itemValue);
+    netValue = netValue.plus(norm.netValue);
     totalQuantity += norm.itemQuantity;
 
     totalCgst = totalCgst.plus(norm.taxBreakdown.cgst);
@@ -693,6 +708,7 @@ function runAccountingAnalysis({
         monthKey,
         label: monthLabelOf(monthKey),
         amount: "0",
+        netAmount: "0",
         grossAmount: "0",
         returnsAmount: "0",
         invoices: 0,
@@ -701,6 +717,7 @@ function runAccountingAnalysis({
         quantity: 0
       });
       m.amount = toDecimalString(toDecimal(m.amount).plus(norm.invoicedValue));
+      m.netAmount = toDecimalString(toDecimal(m.netAmount).plus(norm.netValue));
       if (norm.isReturn) {
         m.returnsAmount = toDecimalString(toDecimal(m.returnsAmount).plus(norm.rawVoucherAmount));
         m.returns += 1;
@@ -720,6 +737,7 @@ function runAccountingAnalysis({
       city: norm.partyProfile.city,
       country: norm.partyProfile.country,
       amount: "0",
+      netAmount: "0",
       grossAmount: "0",
       taxableAmount: "0",
       gst: "0",
@@ -733,6 +751,7 @@ function runAccountingAnalysis({
     });
 
     p.amount = toDecimalString(toDecimal(p.amount).plus(norm.invoicedValue));
+    p.netAmount = toDecimalString(toDecimal(p.netAmount).plus(norm.netValue));
     p.taxableAmount = toDecimalString(toDecimal(p.taxableAmount).plus(norm.itemValue));
     p.gst = toDecimalString(toDecimal(p.gst).plus(norm.taxBreakdown.totalTax));
     p.charges = toDecimalString(toDecimal(p.charges).plus(norm.additionalCharges.plus(norm.roundOff).minus(norm.discount)));
@@ -761,8 +780,9 @@ function runAccountingAnalysis({
 
     // State Bucket
     const stateName = norm.partyProfile.state || NO_STATE_LABEL;
-    const s = bucket(byState, stateName, { name: stateName, amount: "0", invoices: 0 });
+    const s = bucket(byState, stateName, { name: stateName, amount: "0", netAmount: "0", invoices: 0 });
     s.amount = toDecimalString(toDecimal(s.amount).plus(norm.invoicedValue));
+    s.netAmount = toDecimalString(toDecimal(s.netAmount).plus(norm.netValue));
     s.invoices += 1;
 
     // City Bucket
@@ -772,9 +792,11 @@ function runAccountingAnalysis({
       state: norm.partyProfile.state,
       confidence: norm.partyProfile.cityConfidence,
       amount: "0",
+      netAmount: "0",
       invoices: 0
     });
     c.amount = toDecimalString(toDecimal(c.amount).plus(norm.invoicedValue));
+    c.netAmount = toDecimalString(toDecimal(c.netAmount).plus(norm.netValue));
     c.invoices += 1;
     if (norm.partyProfile.cityConfidence === "low" || norm.partyProfile.cityConfidence === "none") {
       c.confidence = norm.partyProfile.cityConfidence;
@@ -790,10 +812,14 @@ function runAccountingAnalysis({
           name: row.product,
           unit: row.unit || null,
           amount: "0",
+          grossAmount: "0",
           quantity: 0,
           invoices: 0
         });
         item.amount = toDecimalString(toDecimal(item.amount).plus(toDecimal(row.amount)));
+        item.grossAmount = toDecimalString(toDecimal(item.grossAmount).plus(toDecimal(row.totalAmount)));
+        itemGrossValue = itemGrossValue.plus(toDecimal(row.totalAmount));
+        itemNetValue = itemNetValue.plus(toDecimal(row.amount));
         item.quantity += row.quantity;
         item.invoices += 1;
         if (item.unit && row.unit && item.unit !== row.unit) item.unit = null;
@@ -802,6 +828,30 @@ function runAccountingAnalysis({
   }
 
   const months = [...byMonth.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+
+  /**
+   * Both measures under one pair of names, on every bucket the page can plot.
+   *
+   * The reader can switch the whole analysis between gross ("with charges") and
+   * base revenue ("without charges"). The two sit on different fields per
+   * dimension — a voucher's invoiced value against its stock lines' own amounts —
+   * so each bucket states the pair outright rather than leaving the caller to know
+   * which field its dimension happens to keep them in.
+   */
+  const tagMeasures = (entry, gross, net) => {
+    entry.amountWithCharges = gross;
+    entry.amountWithoutCharges = net;
+  };
+  for (const m of months) tagMeasures(m, m.amount, m.netAmount);
+  for (const p of byParty.values()) tagMeasures(p, p.amount, p.netAmount);
+  for (const s of byState.values()) tagMeasures(s, s.amount, s.netAmount);
+  for (const c of byCity.values()) tagMeasures(c, c.amount, c.netAmount);
+  // An item bucket is summed from stock lines, so its own amount is already the net
+  // measure and the gross one is the line total that carries the tax and charges.
+  for (const i of byItem.values()) {
+    i.netAmount = i.amount;
+    tagMeasures(i, i.grossAmount, i.amount);
+  }
 
   const totalSalesDecimal = invoicedValue.isZero() ? new Decimal(1) : invoicedValue;
 
@@ -867,6 +917,13 @@ function runAccountingAnalysis({
       purchaseReturnsValue: !isSales ? toDecimalString(returnsValue) : undefined,
       itemValue: toDecimalString(itemValue),
       taxableAmount: toDecimalString(itemValue),
+      // What the breakdowns close to in each measure. netValue counts service
+      // invoices, which itemValue (stock lines only) leaves out; and the item
+      // ranking files a service ledger billed under its own name as an item, so
+      // that dimension states its own pair rather than borrowing itemValue.
+      netValue: toDecimalString(netValue),
+      itemValueWithCharges: toDecimalString(itemGrossValue),
+      itemValueWithoutCharges: toDecimalString(itemNetValue),
       taxAndCharges: toDecimalString(totalTax.plus(totalCharges)),
       itcApprox: !isSales ? toDecimalString(totalTax.plus(totalCharges)) : undefined,
       taxBreakdown: {

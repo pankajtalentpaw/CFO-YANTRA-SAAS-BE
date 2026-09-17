@@ -67,14 +67,21 @@ function sortByTotal(totals) {
 /* ------------------------------------------------------------------ */
 
 /**
- * The signed amount for one row.
+ * The signed amount for one row, in the measure being read.
  *
  * `SalesAmount` is a decimal STRING holding a magnitude. Whether it was a
  * credit — a sales return — is recorded separately, either on the row's _meta
  * or on the row itself depending on which path produced it.
+ *
+ * "withCharges" reads the row's share of GST and ledger charges instead, and
+ * falls back to the product-only figure for rows built before the builder
+ * carried both.
  */
-function signedAmount(row) {
-  const magnitude = toDecimal(row.SalesAmount || 0);
+function signedAmount(row, measure) {
+  const source = measure === "withCharges" && row.SalesAmountWithCharges
+    ? row.SalesAmountWithCharges
+    : row.SalesAmount;
+  const magnitude = toDecimal(source || 0);
   const isCredit = Boolean((row._meta && row._meta.isCredit) || row.isCredit);
   return isCredit ? magnitude.negated() : magnitude;
 }
@@ -98,6 +105,7 @@ function labelOf(value, fallback) {
 function buildAnalyticsCube(rows, options = {}) {
   const list = Array.isArray(rows) ? rows : [];
   const netReturns = options.netReturns !== false;
+  const measure = options.measure === "withCharges" ? "withCharges" : "withoutCharges";
 
   const axis = buildPeriodAxis(list, options);
   const modalYear = findModalYear(list);
@@ -139,7 +147,7 @@ function buildAnalyticsCube(rows, options = {}) {
       continue;
     }
 
-    const raw = signedAmount(row);
+    const raw = signedAmount(row, measure);
     if (raw.isNegative()) {
       creditRows++;
       creditAmount = creditAmount.plus(raw.abs());

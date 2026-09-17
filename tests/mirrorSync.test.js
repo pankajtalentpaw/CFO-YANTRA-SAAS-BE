@@ -1,7 +1,5 @@
 jest.mock("../src/integrations/tally/transports/xml.transport", () => ({ sendXmlRequest: jest.fn() }));
 
-const { execFileSync } = require("child_process");
-const mongoose = require("mongoose");
 const { sendXmlRequest } = require("../src/integrations/tally/transports/xml.transport");
 const { parseTallyResponse } = require("../src/integrations/tally/tally.parser");
 const { invalidate } = require("../src/services/companyScope.service");
@@ -9,8 +7,8 @@ const service = require("../src/services/companyData.service");
 const { syncCompany, runSyncCycle } = require("../src/services/sync/syncEngine.service");
 const mirror = require("../src/services/sync/mirror.service");
 const { Company, SyncState, DOMAIN_MODELS, Voucher } = require("../src/models");
+const { connectDatabase, disconnectDatabase, isConnected } = require("../src/config/db");
 
-const TEST_URI = process.env.MONGODB_TEST_URI || "mongodb://127.0.0.1:27017/cfo_yantra_test";
 const COMPANY = { companyId: "guid-sync-1", name: "Sync Test Co", guid: "guid-sync-1", startingAt: "2023-04-01" };
 
 function transportOk(collectionXml) {
@@ -36,46 +34,18 @@ function routeTally(domainXml) {
   );
 }
 
-/**
- * Whether MongoDB is reachable has to be known while the suite is being
- * collected, because that is when the test/test.skip choice is made - long
- * before any async beforeAll could answer it. Hence a one-off synchronous
- * TCP probe rather than an async connect.
- */
-function mongoReachable(uri) {
-  const match = /mongodb:\/\/([^:/,]+)(?::(\d+))?/.exec(uri);
-  const host = match ? match[1] : "127.0.0.1";
-  const port = match && match[2] ? match[2] : "27017";
-  try {
-    execFileSync(
-      process.execPath,
-      ["-e", `const n=require("net");const s=n.connect(${port},"${host}");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),2000)`],
-      { stdio: "ignore", timeout: 5000 }
-    );
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-const mongoUp = mongoReachable(TEST_URI);
-
 beforeAll(async () => {
-  if (!mongoUp) return;
-  await mongoose.connect(TEST_URI, { serverSelectionTimeoutMS: 3000, bufferCommands: false });
+  await connectDatabase();
 });
 
 afterAll(async () => {
-  if (mongoUp) {
-    await mongoose.connection.dropDatabase();
-    await mongoose.disconnect();
-  }
+  await disconnectDatabase();
 });
 
 beforeEach(async () => {
   sendXmlRequest.mockReset();
   invalidate();
-  if (mongoUp) {
+  if (isConnected()) {
     await Promise.all([
       ...Object.values(DOMAIN_MODELS).map((m) => m.deleteMany({})),
       Voucher.deleteMany({}),
@@ -85,7 +55,7 @@ beforeEach(async () => {
   }
 });
 
-const itDb = () => (mongoUp ? test : test.skip);
+const itDb = () => test;
 
 describe("Local mirror sync pipeline", () => {
   itDb()("writes extracted ledgers into the mirror", async () => {
@@ -202,5 +172,110 @@ describe("Fallback safety", () => {
   itDb()("mirror read returns null for an empty domain rather than an empty answer", async () => {
     const result = await mirror.readDomain("guid-nothing-here", "ledgers");
     expect(result).toBeNull();
+  });
+});
+
+describe("Partial writes never tombstone", () => {
+  /*
+   * The CDC engine writes a DELTA - only the vouchers whose AlterId moved -
+   * through the same upsert path the full sync uses. That path tombstones
+   * anything absent from the set it was handed, which is correct for a complete
+   * register and catastrophic for a batch of three: one CDC run struck off
+   * 2,412 live vouchers, and a company mirrored only by CDC read back empty
+   * while every row was still sitting in the table.
+   *
+   * Nothing caught it because every existing tombstone test hands over the
+   * complete set. These cases pin the distinction itself.
+   */
+  const CO = "guid-cdc-partial";
+  const vch = (id, date) => ({
+    sourceObjectId: id,
+    objectType: "SalesVoucher",
+    voucherType: "Sales",
+    voucherDate: date,
+    partyLedgerName: "Acme Traders",
+    amount: "100.00"
+  });
+
+  itDb()("a CDC delta leaves the vouchers outside its batch alone", async () => {
+    await mirror.upsertVouchers(
+      CO,
+      [vch("v1", "2024-05-01"), vch("v2", "2024-05-02"), vch("v3", "2024-05-03")],
+      "RUN_FULL"
+    );
+    expect(await Voucher.count({ where: { companyId: CO, isDeleted: false } })).toBe(3);
+
+    // Exactly what a CDC tick sends: one altered voucher, not the register.
+    const stats = await mirror.upsertVouchers(CO, [vch("v2", "2024-05-02")], "CDC_1", {
+      tombstoneMissing: false
+    });
+
+    expect(stats.tombstoned).toBe(0);
+    expect(await Voucher.count({ where: { companyId: CO, isDeleted: false } })).toBe(3);
+  });
+
+  itDb()("a complete set still tombstones what genuinely vanished", async () => {
+    await mirror.upsertVouchers(CO, [vch("v1", "2024-05-01"), vch("v2", "2024-05-02")], "RUN_FULL");
+    // v2 is gone from Tally, and this caller is handing over the whole register.
+    const stats = await mirror.upsertVouchers(CO, [vch("v1", "2024-05-01")], "RUN_FULL_2");
+
+    expect(stats.tombstoned).toBe(1);
+    expect(await Voucher.count({ where: { companyId: CO, isDeleted: false } })).toBe(1);
+  });
+});
+
+describe("Change detection excludes per-read bookkeeping", () => {
+  /*
+   * The whole economy of the sync loop rests on one claim: a company where
+   * nothing moved costs no writes. That held for masters and quietly failed for
+   * vouchers, because the canonical sales voucher is stamped with a fresh
+   * `syncRunId` and `sourceFetchedAt` on every single read. Hashing those made
+   * every voucher look changed, so a register of 10,812 was rewritten in full
+   * every five minutes against a Tally that had not changed at all.
+   *
+   * The ledger test above could never have caught it — masters carry no such
+   * fields. These cases pin the rule at the level it actually matters: what the
+   * hash is allowed to notice.
+   */
+  const voucher = () => ({
+    sourceObjectId: "vch-1",
+    objectType: "SalesVoucher",
+    voucherType: "Sales",
+    voucherDate: "2024-05-10",
+    partyLedgerName: "Acme Traders",
+    amount: "1000.00"
+  });
+
+  test("a re-read of identical data hashes the same despite new run id and fetch time", () => {
+    const firstRead = {
+      ...voucher(),
+      syncRunId: "RUN_1", sourceFetchedAt: "2026-01-01T00:00:00.000Z",
+      extractionRunId: "EX_1", checksum: "chk_1"
+    };
+    const secondRead = {
+      ...voucher(),
+      syncRunId: "RUN_2", sourceFetchedAt: "2026-06-30T12:34:56.000Z",
+      extractionRunId: "EX_2", checksum: "chk_2"
+    };
+    expect(mirror.contentHash(firstRead)).toBe(mirror.contentHash(secondRead));
+  });
+
+  test("an AlterId only one of the two writers stamps is not a content change", () => {
+    // CDC stamps AlterId; the full sync's pass does not. Hashing it meant the
+    // same voucher hashed two ways depending on who wrote it last, and the two
+    // writers rewrote the same 928 records on every cycle forever.
+    const base = { ...voucher(), syncRunId: "RUN_1", sourceFetchedAt: "2026-01-01T00:00:00.000Z" };
+    expect(mirror.contentHash({ ...base, alterId: 40916 })).toBe(mirror.contentHash({ ...base, alterId: null }));
+    expect(mirror.contentHash({ ...base, alterId: 40916 })).toBe(mirror.contentHash(base));
+  });
+
+  test("a real content change still moves the hash", () => {
+    const base = { ...voucher(), syncRunId: "RUN_1", sourceFetchedAt: "2026-01-01T00:00:00.000Z" };
+    expect(mirror.contentHash({ ...base, amount: "2000.00" })).not.toBe(mirror.contentHash(base));
+    expect(mirror.contentHash({ ...base, voucherDate: "2024-05-11" })).not.toBe(mirror.contentHash(base));
+    expect(mirror.contentHash({ ...base, partyLedgerName: "Other Co" })).not.toBe(mirror.contentHash(base));
+    // An alteration Tally reports via AlterId always moves real content too, so
+    // excluding AlterId above never hides a genuine change.
+    expect(mirror.contentHash({ ...base, alterId: 40917, amount: "2000.00" })).not.toBe(mirror.contentHash(base));
   });
 });

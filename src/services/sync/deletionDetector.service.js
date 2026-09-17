@@ -7,7 +7,7 @@ const realtimeSocket = require("../realtimeSocket.service");
 const { logger } = require("../../utils/logger");
 
 /**
- * Detects deleted vouchers by comparing active MongoDB mirror vouchers
+ * Detects deleted vouchers by comparing active SQL mirror vouchers
  * against Tally's live lightweight voucher keys.
  * 
  * Performance: ~100-150ms total query and diffing time.
@@ -41,16 +41,18 @@ async function detectAndReconcileDeletions(companyId, companyName) {
       if (stableId) tallyLiveIds.add(stableId);
     }
 
-    // 2. Query active (non-deleted) vouchers from MongoDB mirror
-    const activeMongoVouchers = await Voucher.find(
-      { companyId, isDeleted: { $ne: true } },
-      { sourceObjectId: 1, "header.guid": 1, "header.voucherNumber": 1 }
-    ).lean();
+    // 2. Query active (non-deleted) vouchers from SQL mirror
+    const activeSqlVouchers = await Voucher.findAll({
+      where: { companyId, isDeleted: false },
+      attributes: ["id", "sourceObjectId", "header", "data"],
+      raw: true
+    });
 
     const vanished = [];
 
-    for (const doc of activeMongoVouchers) {
-      const docGuid = (doc.header && doc.header.guid) || null;
+    for (const doc of activeSqlVouchers) {
+      const header = doc.header || (doc.data && doc.data.header);
+      const docGuid = (header && header.guid) || null;
       const docStableId = doc.sourceObjectId;
 
       // Check if voucher vanished from Tally
@@ -67,35 +69,36 @@ async function detectAndReconcileDeletions(companyId, companyName) {
     }
 
     if (vanished.length === 0) {
-      return { checked: activeMongoVouchers.length, deletedCount: 0, deletedGuids: [] };
+      return { checked: activeSqlVouchers.length, deletedCount: 0, deletedGuids: [] };
     }
 
     // Safety Circuit Breaker:
     // If Tally returns 0 records or if more than 15 vouchers (or > 15% of active records) vanish at once,
     // ABORT DELETION to protect historical records against filter truncation or gateway glitches.
-    if (tallyRecords.length === 0 && activeMongoVouchers.length > 0) {
+    if (tallyRecords.length === 0 && activeSqlVouchers.length > 0) {
       logger.warn(
-        { companyId, activeCount: activeMongoVouchers.length },
+        { companyId, activeCount: activeSqlVouchers.length },
         "Deletion check skipped - Tally returned 0 keys (possible company context/startup)"
       );
-      return { checked: activeMongoVouchers.length, deletedCount: 0, deletedGuids: [] };
+      return { checked: activeSqlVouchers.length, deletedCount: 0, deletedGuids: [] };
     }
 
-    const maxAllowedDeletions = Math.max(10, Math.floor(activeMongoVouchers.length * 0.15));
+    const maxAllowedDeletions = Math.max(10, Math.floor(activeSqlVouchers.length * 0.15));
     if (vanished.length > maxAllowedDeletions) {
       logger.warn(
-        { companyId, vanishedCount: vanished.length, maxAllowed: maxAllowedDeletions, activeCount: activeMongoVouchers.length },
+        { companyId, vanishedCount: vanished.length, maxAllowed: maxAllowedDeletions, activeCount: activeSqlVouchers.length },
         "MASS DELETION CIRCUIT BREAKER TRIPPED: Refusing to tombstone large number of vouchers in one tick (protecting historical records)"
       );
-      return { checked: activeMongoVouchers.length, deletedCount: 0, deletedGuids: [], circuitBreakerTripped: true };
+      return { checked: activeSqlVouchers.length, deletedCount: 0, deletedGuids: [], circuitBreakerTripped: true };
     }
 
-    // 3. Mark vanished vouchers as isDeleted in MongoDB
+    // 3. Mark vanished vouchers as isDeleted in SQL database
     const now = new Date();
-    const vanishedIds = vanished.map((v) => v._id);
-    await Voucher.updateMany(
-      { _id: { $in: vanishedIds } },
-      { $set: { isDeleted: true, deletedAt: now } }
+    const { Op } = require("sequelize");
+    const vanishedIds = vanished.map((v) => v.id || v._id);
+    await Voucher.update(
+      { isDeleted: true, deletedAt: now },
+      { where: { id: { [Op.in]: vanishedIds } } }
     );
 
 
@@ -118,7 +121,7 @@ async function detectAndReconcileDeletions(companyId, companyName) {
     );
 
     return {
-      checked: activeMongoVouchers.length,
+      checked: activeSqlVouchers.length,
       deletedCount: vanished.length,
       deletedGuids
     };

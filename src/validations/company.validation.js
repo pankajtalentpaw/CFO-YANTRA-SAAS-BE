@@ -39,10 +39,15 @@ const dashboardQuerySchema = z.object({
   toDate: dateYyyymmdd.optional()
 });
 
+// Which revenue measure a report is computed in. Absent means product value
+// alone — what every caller got before the choice existed.
+const turnoverMeasure = z.enum(["withCharges", "withoutCharges"]).optional();
+
 // MIS Report 5 query schema
 const report5QuerySchema = z.object({
   fromDate: dateYyyymmdd.optional(),
   toDate: dateYyyymmdd.optional(),
+  measure: turnoverMeasure,
   filterId: z.coerce.number().int().min(0).max(17).optional(),
   subCatA: z.string().max(200).optional(),
   subCatB: z.string().max(200).optional(),
@@ -54,6 +59,7 @@ const report5QuerySchema = z.object({
 const report5AnalyticsQuerySchema = z.object({
   fromDate: dateYyyymmdd.optional(),
   toDate: dateYyyymmdd.optional(),
+  measure: turnoverMeasure,
   lensId: z.coerce.number().int().min(1).max(16).optional(),
   analysisId: z.string().regex(/^L\d{2}\.A\d{2}$/).optional()
 });
@@ -61,7 +67,8 @@ const report5AnalyticsQuerySchema = z.object({
 // Decision Intelligence Dashboards query schema
 const report5DashboardsQuerySchema = z.object({
   fromDate: dateYyyymmdd.optional(),
-  toDate: dateYyyymmdd.optional()
+  toDate: dateYyyymmdd.optional(),
+  measure: turnoverMeasure
 });
 
 module.exports = {

@@ -1,49 +1,69 @@
-const mongoose = require("mongoose");
+const { DataTypes } = require("sequelize");
+const { sequelize } = require("../config/db");
 
-/**
- * Per-company record of what the last sync run did.
- *
- * This is what /api/sync/status reports, and what tells an operator whether the
- * mirror can be trusted for a given company: which domains succeeded, which
- * failed and why, and how stale the data is.
- */
-const domainResultSchema = new mongoose.Schema(
+const SyncState = sequelize.define(
+  "SyncState",
   {
-    status: { type: String, default: "PENDING" }, // PENDING | SUCCESS | FAILED | SKIPPED
-    total: { type: Number, default: 0 },
-    inserted: { type: Number, default: 0 },
-    updated: { type: Number, default: 0 },
-    unchanged: { type: Number, default: 0 },
-    tombstoned: { type: Number, default: 0 },
-    durationMs: { type: Number, default: 0 },
-    error: { type: mongoose.Schema.Types.Mixed, default: null },
-    syncedAt: { type: Date, default: null }
+    companyId: {
+      type: DataTypes.STRING,
+      primaryKey: true,
+      allowNull: false
+    },
+    companyName: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    status: {
+      type: DataTypes.STRING,
+      defaultValue: "IDLE"
+    },
+    lastRunId: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    lastStartedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    lastFinishedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    lastDurationMs: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    lastSuccessAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    lastError: {
+      type: DataTypes.JSON,
+      allowNull: true
+    },
+    totalRecords: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    changedRecords: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    runCount: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    domains: {
+      type: DataTypes.JSON,
+      defaultValue: {}
+    }
   },
-  { _id: false }
+  {
+    tableName: "sync_states",
+    timestamps: true
+  }
 );
 
-const syncStateSchema = new mongoose.Schema(
-  {
-    companyId: { type: String, required: true, unique: true },
-    companyName: { type: String, default: null },
+const { attachCompat } = require("./sqlModelCompat");
 
-    // IDLE | RUNNING | SUCCESS | PARTIAL | FAILED
-    status: { type: String, default: "IDLE" },
-    lastRunId: { type: String, default: null },
-    lastStartedAt: { type: Date, default: null },
-    lastFinishedAt: { type: Date, default: null },
-    lastDurationMs: { type: Number, default: 0 },
-    lastSuccessAt: { type: Date, default: null },
-    lastError: { type: mongoose.Schema.Types.Mixed, default: null },
-
-    domains: { type: Map, of: domainResultSchema, default: {} },
-    totalRecords: { type: Number, default: 0 },
-    changedRecords: { type: Number, default: 0 },
-    runCount: { type: Number, default: 0 }
-  },
-  { timestamps: true, collection: "syncstates", minimize: false }
-);
-
-const SyncState = mongoose.models.SyncState || mongoose.model("SyncState", syncStateSchema);
-
-module.exports = SyncState;
+module.exports = attachCompat(SyncState);

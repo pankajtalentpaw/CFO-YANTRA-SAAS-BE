@@ -1,88 +1,73 @@
-const mongoose = require("mongoose");
+const { DataTypes } = require("sequelize");
+const { sequelize } = require("../config/db");
 
-/**
- * System Settings Model
- * Persists application-level and integration configurations such as dynamic Tally connection parameters.
- */
-const systemSettingsSchema = new mongoose.Schema(
+const SystemSettings = sequelize.define(
+  "SystemSettings",
   {
     key: {
-      type: String,
-      required: true,
-      unique: true,
-      default: "TALLY_CONFIG"
+      type: DataTypes.STRING,
+      primaryKey: true,
+      allowNull: false
     },
     tallyHost: {
-      type: String,
-      trim: true,
-      default: "127.0.0.1"
+      type: DataTypes.STRING,
+      defaultValue: "127.0.0.1"
     },
     tallyPort: {
-      type: Number,
-      min: 1,
-      max: 65535,
-      default: 9000
+      type: DataTypes.INTEGER,
+      defaultValue: 9000
     },
     protocol: {
-      type: String,
-      enum: ["http", "https"],
-      default: "http"
+      type: DataTypes.STRING,
+      defaultValue: "http"
     },
     connectionMode: {
-      type: String,
-      enum: ["DIRECT", "AGENT"],
-      default: "DIRECT"
+      type: DataTypes.STRING,
+      defaultValue: "DIRECT"
     },
     targetCompany: {
-      type: String,
-      trim: true,
-      default: ""
+      type: DataTypes.STRING,
+      defaultValue: ""
     },
     timeoutMs: {
-      type: Number,
-      min: 1000,
-      max: 300000,
-      default: 120000
+      type: DataTypes.INTEGER,
+      defaultValue: 120000
     },
     probeTimeoutMs: {
-      type: Number,
-      min: 1000,
-      max: 60000,
-      default: 8000
+      type: DataTypes.INTEGER,
+      defaultValue: 8000
     },
     autoSyncEnabled: {
-      type: Boolean,
-      default: true
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
     },
     syncIntervalMs: {
-      type: Number,
-      min: 10000,
-      max: 3600000,
-      default: 300000
+      type: DataTypes.INTEGER,
+      defaultValue: 300000
     },
     lastKnownStatus: {
-      type: String,
-      enum: ["ONLINE", "OFFLINE", "UNKNOWN"],
-      default: "UNKNOWN"
+      type: DataTypes.STRING,
+      defaultValue: "UNKNOWN"
     },
     lastConnectedAt: {
-      type: Date,
-      default: null
+      type: DataTypes.DATE,
+      allowNull: true
     },
     lastResponseTimeMs: {
-      type: Number,
-      default: null
+      type: DataTypes.INTEGER,
+      allowNull: true
     },
     activeCompanies: {
-      type: [String],
-      default: []
+      type: DataTypes.JSON,
+      defaultValue: []
     }
   },
   {
+    tableName: "system_settings",
     timestamps: true
   }
 );
 
-const SystemSettings = mongoose.models.SystemSettings || mongoose.model("SystemSettings", systemSettingsSchema);
+const { attachCompat } = require("./sqlModelCompat");
 
-module.exports = SystemSettings;
+module.exports = attachCompat(SystemSettings);

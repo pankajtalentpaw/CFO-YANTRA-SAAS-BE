@@ -269,8 +269,28 @@ async function getDashboard(company, options = {}) {
 
   // Default window: the last 12 months up to today. Explicit bounds always win.
   const today = toIsoString(new Date());
-  const periodTo = toIsoBound(options.toDate) || today;
-  const periodFrom = toIsoBound(options.fromDate) || addDays(periodTo, -364);
+  let periodTo = toIsoBound(options.toDate) || today;
+  let periodFrom = toIsoBound(options.fromDate) || addDays(periodTo, -364);
+
+  /*
+   * A window the register does not reach renders eight zeroes and a chart with
+   * no axis. "Last 12 months" is measured from the wall clock, but a mirrored
+   * company's books end wherever they end — one here stops fifteen months
+   * before today, so the default window legitimately contains nothing at all.
+   *
+   * Making the reader discover that, change the filter, and wait out a second
+   * round trip is the slowest possible way to show data that was already in
+   * hand. When the requested window holds nothing and the register does, snap
+   * to what the company actually booked and declare it, so the client can
+   * label the period without asking again.
+   */
+  let periodAutoAdjusted = false;
+  const hasVouchersInPeriod = dated.some((v) => v.voucherDate >= periodFrom && v.voucherDate <= periodTo);
+  if (!hasVouchersInPeriod && registerSpan.from && registerSpan.to) {
+    periodFrom = registerSpan.from;
+    periodTo = registerSpan.to;
+    periodAutoAdjusted = true;
+  }
 
   const periodDays = Math.max(daysBetween(periodFrom, periodTo), 1);
   // The window of equal length ending the day before this one starts.
@@ -420,6 +440,10 @@ async function getDashboard(company, options = {}) {
     syncedAt: register.syncedAt || null,
     source: register.source || "tally",
     period: { from: periodFrom, to: periodTo, days: periodDays },
+    // True when the window above is not the one that was asked for, because
+    // the requested one held nothing. The client shows this period as selected
+    // rather than issuing a second request for it.
+    periodAutoAdjusted,
     previousPeriod: { from: previousFrom, to: previousTo },
     // What the register actually holds, so the UI can say "nothing in this
     // window" without implying the company has no data at all.

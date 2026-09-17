@@ -3,7 +3,7 @@
  *
  * Provides:
  *   1. Robust in-memory array pagination with nested field search & sorting
- *   2. Mongoose / MongoDB query pagination helper
+ *   2. SQL / Sequelize query pagination helper
  *   3. Strict validation & sanitization of pagination parameters
  *   4. Dedicated Pagination Error Planning & Diagnostics Matrix
  *   5. Comprehensive metadata calculations (totalPages, hasMore, hasPrev, offset)
@@ -284,34 +284,27 @@ function paginate(records = [], query = {}, searchFields = PAGINATION_DEFAULTS.D
 }
 
 /**
- * Mongoose Query Pagination Helper
+ * SQL / Sequelize Query Pagination Helper
  *
- * @param {import('mongoose').Model} model - Mongoose Model
- * @param {object} [filter={}] - Mongo query filter
+ * @param {object} model - Sequelize Model
+ * @param {object} [where={}] - SQL where conditions
  * @param {object} [queryParams={}] - { page, limit, sortBy, sortOrder }
- * @param {object} [options={}] - { select, populate, lean }
+ * @param {object} [options={}] - { attributes, include, raw }
  * @returns {Promise<{ items: Array, pagination: object }>}
  */
-async function paginateMongoose(model, filter = {}, queryParams = {}, options = {}) {
+async function paginateSql(model, where = {}, queryParams = {}, options = {}) {
   const { page, limit, offset, sortBy, sortOrder } = parsePaginationParams(queryParams, options);
 
-  let query = model.find(filter);
+  const order = sortBy ? [[sortBy, sortOrder.toUpperCase()]] : undefined;
 
-  if (options.select) query = query.select(options.select);
-  if (options.populate) query = query.populate(options.populate);
-
-  if (sortBy) {
-    query = query.sort({ [sortBy]: sortOrder === "desc" ? -1 : 1 });
-  }
-
-  if (options.lean !== false) {
-    query = query.lean();
-  }
-
-  const [items, total] = await Promise.all([
-    query.skip(offset).limit(limit).exec(),
-    model.countDocuments(filter).exec()
-  ]);
+  const { count: total, rows: items } = await model.findAndCountAll({
+    where,
+    limit,
+    offset,
+    order,
+    attributes: options.attributes || options.select,
+    raw: options.raw !== false
+  });
 
   const pagination = calculatePaginationMeta(total, page, limit);
 
@@ -330,5 +323,6 @@ module.exports = {
   validatePaginationParams,
   calculatePaginationMeta,
   paginate,
-  paginateMongoose
+  paginateSql,
+  paginateMongoose: paginateSql
 };

@@ -2,13 +2,14 @@
 
 [![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)
 [![Express](https://img.shields.io/badge/Express-4.x-black.svg)](https://expressjs.com/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-Local%20Mirror-brightgreen.svg)](https://www.mongodb.com/)
-[![Tests](https://img.shields.io/badge/Tests-1086%20Passed%20%2F%2032%20Suites-brightgreen.svg)]()
+[![Database](https://img.shields.io/badge/SQL%20Database-Sequelize%20(SQLite%20%2F%20PostgreSQL)-blue.svg)](https://sequelize.org/)
+[![TallyPrime](https://img.shields.io/badge/TallyPrime%20API-Native%20JSON%20%26%20XML%20(Port%209000)-orange.svg)](https://tallysolutions.com/tallyprime-api-explorer/)
+[![Tests](https://img.shields.io/badge/Tests-1105%20Passed%20%2F%2035%20Suites-brightgreen.svg)]()
 [![Decimal.js](https://img.shields.io/badge/Arithmetic-Decimal.js%20(28--Digit%20Precision)-blue.svg)]()
 [![Architecture](https://img.shields.io/badge/Architecture-Pure%20Function--Based%20Modular-orange.svg)]()
 
 > **Master Technical & Architectural Documentation**  
-> Comprehensive guide to system architecture, TallyPrime ingestion pipelines, canonical models, high-precision financial arithmetic, the 18 Analytical Lenses (160 Decision Intelligence Analyses), automated cross-verification matrices (CV01–CV16), role-based dashboards, and REST API contracts.
+> Comprehensive guide to system architecture, TallyPrime API Explorer JSON & XML ingestion pipelines, SQL database mirroring (Sequelize), canonical models, high-precision financial arithmetic, the 18 Analytical Lenses (160 Decision Intelligence Analyses), automated cross-verification matrices (CV01–CV16), role-based dashboards, and REST API contracts.
 
 ---
 
@@ -16,15 +17,15 @@
 
 1. [Executive Overview & Core Tenets](#1-executive-overview--core-tenets)
 2. [High-Level System Architecture](#2-high-level-system-architecture)
-3. [Data Extraction & Ingestion Pipeline](#3-data-extraction--ingestion-pipeline)
-   - [Where Data Comes From (TallyPrime Source)](#where-data-comes-from-tallyprime-source)
-   - [How Data Is Extracted (TDL & XML Protocol)](#how-data-is-extracted-tdl--xml-protocol)
+3. [TallyPrime API Explorer & Ingestion Pipeline](#3-tallyprime-api-explorer--ingestion-pipeline)
+   - [Native JSON-First Protocol Architecture](#native-json-first-protocol-architecture)
+   - [Full Catalog of 63 API Explorer Endpoints](#full-catalog-of-63-api-explorer-endpoints)
    - [Safety Gates & Read-Only Barrier](#safety-gates--read-only-barrier)
    - [Incremental Sync, SHA-256 Hashing & Tombstoning](#incremental-sync-sha-256-hashing--tombstoning)
-   - [Dual-Read Path (DB-First Local Mirror + Live Fallback)](#dual-read-path-db-first-local-mirror--live-fallback)
-   - [3.1 TallyPrime Internal Data Origin & Low-Level Source Mapping](#31--tallyprime-internal-data-origin--low-level-source-mapping)
+   - [Dual-Read Path (SQL-First Local Mirror + Live Fallback)](#dual-read-path-sql-first-local-mirror--live-fallback)
 4. [Data Normalization & Canonical Schema Engine](#4-data-normalization--canonical-schema-engine)
-5. [Financial Mathematics & Analytical Algorithms](#5-financial-mathematics--analytical-algorithms)
+5. [Relational SQL Database Layer (Sequelize)](#5-relational-sql-database-layer-sequelize)
+6. [Financial Mathematics & Analytical Algorithms](#6-financial-mathematics--analytical-algorithms)
    - [Arbitrary-Precision Arithmetic (`decimal.js`)](#arbitrary-precision-arithmetic-decimaljs)
    - [Voucher Ledger Breakdown & Tax Reconciliation](#voucher-ledger-breakdown--tax-reconciliation)
    - [The 18 Analytical Lenses & Decision Intelligence Suite (160 Analyses)](#the-18-analytical-lenses--decision-intelligence-suite-160-analyses)
@@ -33,10 +34,10 @@
    - [Cost of Inaction (COI) & Trend Formulas](#cost-of-inaction-coi--trend-formulas)
    - [Concentration & Volatility Indices (HHI, Peak/Trough)](#concentration--volatility-indices-hhi-peaktrough)
    - [AI Virtual CFO Scorecard Scoring Algorithm](#ai-virtual-cfo-scorecard-scoring-algorithm)
-6. [Modular Codebase Organization](#6-modular-codebase-organization)
-7. [Complete REST API Reference (50+ Endpoints)](#7-complete-rest-api-reference-50-endpoints)
-8. [Configuration & Environment Variables (.env)](#8-configuration--environment-variables-env)
-9. [Verification, Testing & Diagnostics](#9-verification-testing--diagnostics)
+7. [Modular Codebase Organization](#7-modular-codebase-organization)
+8. [Complete REST API Reference (50+ Endpoints)](#8-complete-rest-api-reference-50-endpoints)
+9. [Configuration & Environment Variables (.env)](#9-configuration--environment-variables-env)
+10. [Verification, Testing & Diagnostics](#10-verification-testing--diagnostics)
 
 ---
 
@@ -46,16 +47,17 @@
 
 ```mermaid
 graph LR
-    A[TallyPrime :9000] -->|HTTP / XML Loopback| B[CFO Yantra Backend Engine]
-    B -->|Incremental Auto-Sync| C[(MongoDB Local Mirror)]
+    A[TallyPrime :9000] -->|Native JSON / XML Loopback| B[CFO Yantra Backend Engine]
+    B -->|Incremental Auto-Sync| C[(Relational SQL Database - SQLite / PostgreSQL)]
     B -->|Decision Intelligence 160 Blocks| D[Analytics Cube & Verifier]
     B -->|REST APIs :5000| E[CFO Yantra React Frontend]
 ```
 
 ### Core Tenets & Capabilities:
-- **Zero-Latency Ingestion**: Communicates directly with local TallyPrime via native XML/TDL loopback.
-- **Strict Read-Only Guarantee**: Impossible for the engine to modify, write, insert, or delete any record in TallyPrime.
-- **Local MongoDB Mirror**: Real-time asynchronous background mirror engine that offloads heavy analytical compute from Tally's single-threaded runtime.
+- **Zero-Latency Ingestion**: Direct native JSON & XML communication with local TallyPrime HTTP loopback (`127.0.0.1:9000`).
+- **TallyPrime API Explorer Standard**: Native implementation of the complete 63-endpoint catalog documented at [TallyPrime API Explorer](https://tallysolutions.com/tallyprime-api-explorer/).
+- **Strict Read-Only Guarantee**: Impossible for the engine to alter, corrupt, insert, or delete any record in TallyPrime.
+- **Relational SQL Mirror (Sequelize)**: High-speed relational caching in SQLite (edge/desktop) or PostgreSQL (cloud/enterprise) that offloads heavy analytical compute from Tally's single-threaded runtime.
 - **28-Digit Arbitrary Precision Math**: Zero floating-point drift across millions of transactions using `decimal.js` and Banker's rounding (`ROUND_HALF_UP`).
 - **18 Analytical Lenses & 160 Decision Blocks**: Institutional-grade decision intelligence covering revenue trends, geographic penetration, product portfolios, concentration risks, waterfall attributions, volatility, and prescriptive management action protocols.
 - **Deterministic Cross-Verification (CV01–CV16)**: Real-time mathematical proof guaranteeing zero discrepancy between report figures and Tally DayBook totals.
@@ -68,60 +70,131 @@ graph LR
 The backend strictly adheres to a **pure function-based modular architecture** (eliminating stateful OOP abstractions and unnecessary classes):
 - **Controllers** (`src/controllers/`): Validate input payloads, resolve company tenant scopes, orchestrate service calls, and shape standard HTTP envelopes.
 - **Routes** (`src/routes/`): Modular Express routers defining endpoint paths, query validations, and HTTP verbs.
-- **Models** (`src/models/`): Mongoose schema declarations for MongoDB mirroring with indexed search keys and checksum tracking.
+- **Models** (`src/models/`): Sequelize relational schemas for SQL mirroring with indexed composite keys (`companyId`, `sourceObjectId`) and content hashes.
 - **Services** (`src/services/`): Pure business logic, caching layers, extraction orchestrators, and analytics aggregators.
 - **Analytics Engine** (`src/analytics/`): In-memory 3D analytical cube builder, 18 lens compute modules, 160 analysis blocks, role-based dashboards, and cross-verification engine.
-- **Integrations** (`src/integrations/`): Low-level protocol drivers, XML builders, and canonical schema normalizers.
+- **Integrations** (`src/integrations/tally/`): Native JSON & XML protocol drivers, Tally API Explorer catalog, request builders, and canonical schema normalizers.
 
 ---
 
-## 3. Data Extraction & Ingestion Pipeline
+## 3. TallyPrime API Explorer & Ingestion Pipeline
 
-### Where Data Comes From (TallyPrime Source)
-- **Source System**: TallyPrime (or Tally.ERP 9) running locally on Windows or LAN server (`http://127.0.0.1:9000`).
-- **Target Data**:
-  - **Company Identity**: GUID, Formal Name, Financial Year Bounds, Books Date, AlterId.
-  - **Accounting Masters**: Ledgers, Groups, Voucher Types, Currencies.
-  - **Inventory Masters**: Stock Items, Stock Groups, Stock Categories, Units, Godowns.
-  - **Dimensions**: Cost Categories, Cost Centres.
-  - **Transactions**: Sales Vouchers, Purchase Vouchers, Receipts, Payments, Journals, Bill Allocations, and Inventory Entries.
+### Native JSON-First Protocol Architecture
+Following the official [TallyPrime API Explorer](https://tallysolutions.com/tallyprime-api-explorer/) specification, requests are dispatched as clean native JSON payloads over HTTP POST to port `9000`.
 
-### How Data Is Extracted (TDL & XML Protocol)
-Requests are dispatched as TDL-compliant XML payloads:
-```xml
-<ENVELOPE>
-  <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Export</TALLYREQUEST>
-    <TYPE>Collection</TYPE>
-    <ID>CFO_Vouchers_Extract</ID>
-  </HEADER>
-  <BODY>
-    <DESC>
-      <STATICVARIABLES>
-        <SVCURRENTCOMPANY>Acme Corp</SVCURRENTCOMPANY>
-        <SVFROMDATE>20240401</SVFROMDATE>
-        <SVTODATE>20250331</SVTODATE>
-      </STATICVARIABLES>
-      <TDL>
-        <TDLMESSAGE>
-          <COLLECTION NAME="CFO_Vouchers_Extract" ISMODIFY="No">
-            <TYPE>Voucher</TYPE>
-            <FETCH>DATE, VOUCHERNUMBER, VOUCHERTYPENAME, PARTYLEDGERNAME, AMOUNT, ALLLEDGERENTRIES.LIST, ALLINVENTORYENTRIES.LIST</FETCH>
-          </COLLECTION>
-        </TDLMESSAGE>
-      </TDL>
-    </DESC>
-  </BODY>
-</ENVELOPE>
+#### Standard Request Headers:
+```http
+POST / HTTP/1.1
+Host: 127.0.0.1:9000
+Content-Type: application/json; charset=utf-8
+version: 1
+tallyrequest: export
+type: collection | data
+id: <Entity/Collection ID>
 ```
 
+#### JSON Payload Examples:
+**1. Master Collection Request (e.g. Pull All Ledgers):**
+```json
+{
+  "static_variables": [
+    { "name": "svExportFormat", "value": "jsonex" },
+    { "name": "svCurrentCompany", "value": "Demo Company Ltd" }
+  ]
+}
+```
+
+**2. Vouchers with Period Filter (e.g. Sales Vouchers):**
+```json
+{
+  "static_variables": [
+    { "name": "svExportFormat", "value": "jsonex" },
+    { "name": "svCurrentCompany", "value": "Demo Company Ltd" }
+  ],
+  "tdlmessage": [
+    {
+      "definitions": [
+        {
+          "metadata": { "name": "TSPLSalesVouchers", "type": "Collection" },
+          "attributes": [
+            { "Type": "Vouchers:VoucherType" },
+            { "Child Of": "$$VchTypeSales" },
+            { "Native Method": "Date, VoucherTypeName, VoucherNumber, Partyledgername, Amount" },
+            { "Filters": "Period Filter" }
+          ]
+        },
+        {
+          "metadata": { "name": "PeriodFilter", "type": "System", "sys_type": "Formulae", "ismodify": true },
+          "value": "$Date >= ($$Date:\"01-04-2025\") AND $Date <= ($$Date:\"31-03-2026\")"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**3. Financial Reports (e.g. Trial Balance Detailed):**
+```json
+{
+  "static_variables": [
+    { "name": "svExportFormat", "value": "jsonex" },
+    { "name": "svCurrentCompany", "value": "Demo Company Ltd" },
+    { "name": "svFromDate", "value": "20250401" },
+    { "name": "svToDate", "value": "20250430" },
+    { "name": "ExplodeFlag", "value": "Yes" },
+    { "name": "ExplodeAllLevels", "value": "Yes" }
+  ]
+}
+```
+
+---
+
+### Full Catalog of 63 API Explorer Endpoints
+
+The system includes a complete, pre-built catalog in [`src/integrations/tally/catalog/tallyApiExplorer.catalog.js`](file:///c:/Users/admin/Desktop/CFO%20PROJECT/backend/src/integrations/tally/catalog/tallyApiExplorer.catalog.js):
+
+| Category | Entity | Action / Endpoint Key | Description |
+| :--- | :--- | :--- | :--- |
+| **Accounting Masters** | **Ledger** | `pull-all-ledger` | Pulls all ledgers in company |
+| | | `pull-a-ledger` | Pulls single ledger with selected `fetch_list` |
+| | | `pull-ledgers-of-group` | Pulls ledgers filtered by parent group (e.g. `$$GroupBank`) |
+| | | `create-ledger`, `alter-ledger`, `delete-ledger` | Mutation schemas |
+| | **Group** | `pull-all-groups` | Pulls all account groups |
+| | | `pull-group` | Pulls single group with `fetch_list` |
+| | | `pull-groups-of-group` | Pulls groups under parent (e.g. `$$GroupCurrentAssets`) |
+| | | `create-group`, `alter-group`, `delete-group` | Mutation schemas |
+| **Inventory Masters** | **Stock Item** | `pull-all-stock-items` | Pulls all product SKUs & stock items |
+| | | `pull-stock-item` | Pulls single stock item details |
+| | | `pull-stock-items-of-stock-group` | Pulls stock items under a group |
+| | | `create-stock-item`, `alter-stock-item`, `delete-stock-item` | Mutation schemas |
+| | **Stock Group** | `pull-all-stock-groups` | Pulls all inventory categories & groups |
+| | | `pull-stock-group` | Pulls single stock group |
+| | | `pull-stock-group-zero-balance` | Pulls stock groups with zero balances |
+| | | `create-stock-group`, `alter-stock-group`, `delete-stock-group`| Mutation schemas |
+| | **Units** | `pull-all-units` | Pulls all measurement units (PCS, KGS, NOS) |
+| | | `pull-unit` | Pulls single measurement unit |
+| | | `create-simple-unit`, `create-compound-unit`, `alter-unit` | Mutation schemas |
+| **Transactions** | **Payment** | `payment-pull-all`, `payment-pull-period` | Pulls payment vouchers (all / period filtered) |
+| | **Receipt** | `receipt-pull-all`, `receipt-pull-period` | Pulls receipt vouchers (all / period filtered) |
+| | **Sales** | `sales-pull-all`, `sales-pull-period` | Pulls sales invoices & vouchers |
+| | **Purchase** | `purchase-pull-all`, `purchase-pull-period` | Pulls purchase invoices & vouchers |
+| **Reports** | **Trial Balance** | `pull-trial-balance-period` | Trial Balance bounded by date range |
+| | | `pull-trial-balance-detailed` | Detailed multi-level exploded Trial Balance |
+| | | `pull-trial-balance-plain` | Plain unformatted report structure |
+| | | `pull-trial-balance-empty-fields`| Includes zero/empty field records |
+| | | `pull-trial-balance-ledger-wise`| Group-free ledger-wise report |
+| | | `pull-trial-balance-group` | Trial Balance filtered by specific account group |
+| | **Sales Register**| `pull-sales-register-period` | Complete sales register for financial period |
+| | | `pull-sales-register-plain` | Plain unformatted register |
+| | | `pull-sales-register-empty-fields`| Includes empty fields |
+
+---
+
 ### Safety Gates & Read-Only Barrier
-1. **Hard Read-Only Assertion Gate** (`validateReadOnlyXml`):
-   - Regex and structural parser inspects every outgoing payload.
-   - Rejects any payload containing `<TALLYREQUEST>Import</TALLYREQUEST>`, `<IMPORTDATA>`, or mutation tags.
+1. **Hard Read-Only Assertion Gate** (`validateReadOnlyXml` / `tally.readonly.js`):
+   - Structural and pattern verification rejects any payload attempting mutations on read-only flows.
 2. **Company Safety Gate** (`isCompanyStillOpen`):
-   - Sending `SVCURRENTCOMPANY` for a closed company can crash TallyPrime. The engine verifies open company status prior to dispatching queries.
+   - Verifies target company presence before query execution.
 3. **Circuit Breaker** (`tally.breaker.js`):
    - Automatically pauses requests when Tally is unresponsive or overloaded, preventing cascading backend timeouts.
 
@@ -129,58 +202,48 @@ Requests are dispatched as TDL-compliant XML payloads:
 ```mermaid
 flowchart TD
     T[Tally Live Extraction] --> N[Canonical Normalizer]
-    N --> H[Compute SHA-256 Content Hash (Ignoring Volatile Fields)]
-    H --> C{Hash == Existing Mirror Record?}
+    N --> H[Compute SHA-256 Content Hash]
+    H --> C{Hash == Existing SQL Record?}
     C -->|Yes| S[Skip Disk Write]
-    C -->|No| U[Upsert Record + Update syncedAt]
+    C -->|No| U[Atomic SQL Upsert + Update syncedAt]
     T --> D{Record Missing in Tally?}
     D -->|Yes| TM[Mark isDeleted: true & Set deletedAt]
 ```
 
-### Dual-Read Path (DB-First Local Mirror + Live Fallback)
-1. **Primary Read Path (Local Mirror)**: Ultra-fast read ($< 15\text{ms}$ - $300\text{ms}$) from local MongoDB collection. Resolves vouchers, line items, and dimensions without touching TallyPrime's single-threaded event loop.
+### Dual-Read Path (SQL-First Local Mirror + Live Fallback)
+1. **Primary Read Path (Local SQL Mirror)**: Ultra-fast read ($< 5\text{ms}$ - $50\text{ms}$) from local SQLite / PostgreSQL. Serves vouchers, line items, and dimensions without touching TallyPrime's single-threaded event loop.
 2. **Secondary Read Path (Live Fallback)**: If mirror is not yet populated, queries are executed live against TallyPrime with in-memory caching.
-3. **Multi-Company Concurrency Guard**:
-   - **Tally Single-Thread Isolation**: TallyPrime executes queries on a single-threaded desktop event loop. Direct concurrent queries across companies are queued and serialized.
-   - **Asynchronous Sync Engine**: Background workers pre-ingest data into MongoDB using AlterID/SHA-256 change detection.
-   - **Adaptive Timeout Budgets**: 60s frontend timeout budget + 30s Tally gateway timeout budget to ensure zero `REQUEST_TIMEOUT` drops.
-
----
-
-## 3.1 🔍 TallyPrime Internal Data Origin & Low-Level Source Mapping
-
-| Entity / Dimension | TDL Collection Name | Tally Internal Object Type | Tally Internal Fields Extracted (`<FETCH>` / `<NATIVEMETHOD>`) | Target CFO Yantra Model / Metric |
-| :--- | :--- | :--- | :--- | :--- |
-| **Company Profile** | `CompanyCollection` / `CompanyDetailedCollection` | `Company` | `$Name`, `$Guid`, `$StartingFrom`, `$BooksFrom`, `$MasterId`, `$AlterId`, `$GstRegNo`, `$PanCardNo`, `$StateName`, `$CountryName` | `Company` model, Multi-company tenant scoping |
-| **Chart of Accounts (Ledgers)** | `LedgerCollection` / `SalesLedgerCollection` | `Ledger` | `$Name`, `$Parent`, `$OpeningBalance`, `$ClosingBalance`, `$LedStateName`, `$Address.List`, `$PinCode`, `$PartyGSTIN`, `$TaxType`, `$GstType`, `$MailingName` | `Ledger` master, Sundry Debtors (Customers), Sundry Creditors (Suppliers), Party Address/State |
-| **Account Groups** | `GroupCollection` | `Group` | `$Name`, `$Parent`, `$IsRevenue`, `$IsDeemedPositive`, `$AffectsGrossProfit`, `$SortPosition` | `Group` master, P&L / Balance Sheet classification |
-| **Inventory Items** | `StockItemCollection` / `SalesStockItemCollection` | `StockItem` | `$Name`, `$Parent`, `$Category`, `$BaseUnits`, `$OpeningBalance`, `$OpeningValue`, `$OpeningRate`, `$CostingMethod`, `$ValuationMethod`, `$HsnCode` | `StockItem` master, SubCategory hierarchy, Standard cost & pricing |
-| **Inventory Groups** | `StockGroupCollection` | `StockGroup` | `$Name`, `$Parent`, `$IsAddable`, `$BaseUnits` | `StockGroup` tree, Category dimension |
-| **Inventory Categories** | `StockCategoryCollection` | `StockCategory` | `$Name`, `$Parent` | `StockCategory` model |
-| **Warehouses / Locations** | `GodownCollection` | `Godown` | `$Name`, `$Parent`, `$Address`, `$PinCode` | `Godown` dimension (Physical logistics) |
-| **Measurement Units** | `UnitCollection` | `Unit` | `$Name`, `$OriginalName`, `$IsSimpleUnit`, `$DecimalPlaces` | `Unit` dimension & quantity normalization |
-| **Cost Centres / Salesmen** | `CostCentreCollection` / `SalesCostCentreCollection` | `CostCentre` | `$Name`, `$Parent`, `$Category` | Salesman dimension, Departmental allocation |
-| **Cost Categories** | `CostCategoryCollection` | `CostCategory` | `$Name`, `$AllocateRevenue`, `$AllocateNonRevenue` | Cost category mapping |
-| **Voucher Types** | `VoucherTypeCollection` | `VoucherType` | `$Name`, `$Parent`, `$Abbreviation`, `$NumberingMethod`, `$CoreVoucherType`, `$IsActive` | Voucher classification (`Sales`, `Purchase`, `Receipt`, `Payment`, `Journal`) |
-| **Financial Vouchers (Headers)** | `VoucherRegisterCollection` / `SalesVoucherCollection` | `Voucher` | `$Date`, `$Guid`, `$MasterId`, `$AlterId`, `$VoucherTypeName`, `$VoucherNumber`, `$PartyLedgerName`, `$Narration`, `$Amount`, `$IsCancelled`, `$IsOptional` | Transaction Header, Period bounds, Reconciliation register |
-| **Voucher Accounting Lines** | `ALLLEDGERENTRIES.LIST` | `LedgerEntry` (Child of `Voucher`) | `$LedgerName`, `$Amount`, `$IsDeemedPositive`, `$BillAllocations.List` (`$Name`, `$BillType`, `$Amount`), `$InterestCollection.List` | Tax lines (CGST/SGST/IGST), Round-offs, Additional charges, Trade discounts |
-| **Voucher Inventory Lines** | `ALLINVENTORYENTRIES.LIST` | `InventoryEntry` (Child of `Voucher`) | `$StockItemName`, `$ActualQty`, `$BilledQty`, `$Rate`, `$Amount`, `$Discount`, `$BatchAllocations.List` (`$GodownName`, `$BatchName`, `$Amount`, `$ActualQty`), `$AccountingAllocations.List` | Product SKU lines, Invoiced quantities, Unit prices, Line discounts |
+3. **Offline Operation**: Once synced, the software operates 100% offline without requiring TallyPrime to be open.
 
 ---
 
 ## 4. Data Normalization & Canonical Schema Engine
 
-Raw Tally XML structures are transformed into standardized JSON contracts:
+Raw Tally XML and typed JSON (`{ type, value }`) structures are normalized into standardized JS objects:
 
 ### Canonical Entity Models:
-- **Canonical Company**: `{ companyId, name, legalName, formalName, guid, masterId, alterId, startingFrom, booksFrom, baseCurrency, country, state, pinCode, email, phone, mobile, gstin, pan, cin, features: { billWise, costCentres, inventory, multiCurrency, payroll, gstApplicable, tdsApplicable, tcsApplicable, batchEnabled, godownEnabled, bomEnabled }, isOpen, lastSeenAt, checksum }`
+- **Canonical Company**: `{ companyId, name, legalName, formalName, guid, masterId, alterId, startingFrom, booksFrom, baseCurrency, country, state, pinCode, email, phone, mobile, gstin, pan, cin, features, isOpen, lastSeenAt, checksum }`
 - **Canonical Ledger**: `{ companyId, sourceObjectId, name, parent, openingBalance, closingBalance, isParty, isDebtor, isCreditor, address, gstin }`
 - **Canonical Stock Item**: `{ companyId, sourceObjectId, name, parent, category, baseUnit, openingBalance, openingValue, standardCost, standardSellingPrice }`
 - **Canonical Voucher**: `{ companyId, sourceVoucherId, sourceVoucherNumber, voucherType, voucherDate, partyLedgerName, amount, amountIsCredit, isCancelled, ledgerEntries: [...], inventoryEntries: [...] }`
 
 ---
 
-## 5. Financial Mathematics & Analytical Algorithms
+## 5. Relational SQL Database Layer (Sequelize)
+
+The backend uses **Sequelize ORM** supporting **SQLite** (default zero-config local engine) and **PostgreSQL** (enterprise multi-user deployments).
+
+### Relational Tables & Models:
+- **`users`**: System users, bcrypt passwords, verification states.
+- **`companies`**: Tenant companies, statutory registrations (`gstin`, `pan`, `cin`), periods, financial flags.
+- **`sync_states`**: Synchronization metrics, run IDs, domain execution status.
+- **`system_settings`**: Dynamic Tally host, port, protocol, and connection configurations.
+- **`vouchers`**: Transaction headers, line item entries, JSON payload, and SHA-256 content hashes.
+- **Master Tables**: `ledgers`, `groups`, `stock_items`, `stock_groups`, `stock_categories`, `units`, `godowns`, `cost_centres`, `cost_categories`, `voucher_types`, `currencies`.
+
+---
+
+## 6. Financial Mathematics & Analytical Algorithms
 
 ### Arbitrary-Precision Arithmetic (`decimal.js`)
 All monetary and percentage computations use `decimal.js` configured with 28-digit precision and Banker's rounding (`ROUND_HALF_UP`) to guarantee zero balance sheet drift:
@@ -203,7 +266,7 @@ $$\Delta_{\text{Reconciliation}} = \left| \text{Header Total} - \sum_{i=1}^n \te
 
 ### The 18 Analytical Lenses & Decision Intelligence Suite (160 Analyses)
 
-The backend features an analytics engine computing **18 Analytical Lenses** comprising **160 deterministic decision blocks** without LLM halluncination:
+The backend features an analytics engine computing **18 Analytical Lenses** comprising **160 deterministic decision blocks** without LLM hallucination:
 
 | Lens ID | Lens Name | Key Analyses Computed | Core Formulas & Algorithms | Strategic Insight |
 | :---: | :--- | :--- | :--- | :--- |
@@ -228,61 +291,6 @@ The backend features an analytics engine computing **18 Analytical Lenses** comp
 
 ---
 
-### Standard Analysis Block Contract
-
-Every single one of the 160 analyses adheres to a strict canonical JSON schema:
-
-```json
-{
-  "id": "L01.A01",
-  "lensId": 1,
-  "slot": 1,
-  "title": "City Revenue Trend Analysis",
-  "status": "RED | AMBER | GREEN | INFO",
-  "severity": "CRITICAL | HIGH | MEDIUM | LOW | NONE",
-  "priority": 1,
-  "headline": {
-    "label": "Steepest Monthly Decline",
-    "value": -24.5,
-    "unit": "%",
-    "formatted": "-24.5%"
-  },
-  "trigger": {
-    "rule": "Consecutive decline >= 3 months or Slope < 0",
-    "evaluated": "Decline streak of 4 months detected in Mumbai",
-    "fired": true
-  },
-  "redFlag": "RED FLAG — Mumbai (4-month streak on City Revenue Trend)",
-  "narrative": "Mumbai has suffered 4 consecutive months of decline, losing ₹14,20,000 from peak.",
-  "table": {
-    "columns": [
-      { "key": "city", "label": "City", "format": "text" },
-      { "key": "trend", "label": "Trend Direction", "format": "status" },
-      { "key": "slope", "label": "Slope (₹/mo)", "format": "currency" },
-      { "key": "streak", "label": "Decline Streak", "format": "number" },
-      { "key": "coi", "label": "Cost of Inaction", "format": "currency" }
-    ],
-    "rows": [...]
-  },
-  "costOfInaction": {
-    "amount": 1420000,
-    "formatted": "₹14.20 L",
-    "basis": "Peak run-rate minus actual sales across streak months",
-    "horizonMonths": 6
-  },
-  "actions": {
-    "owner": "Reallocate field sales rep and review regional distributor terms.",
-    "salesManager": "Schedule on-site account reviews with top 5 Mumbai dealers."
-  },
-  "provenance": {
-    "periodsUsed": 12,
-    "rowsConsidered": 340
-  }
-}
-```
-
----
-
 ### Cross-Verification Matrix (CV01–CV16)
 
 The engine executes **16 automated mathematical verification checks** across all partitions of the 3D data cube:
@@ -297,171 +305,94 @@ The engine executes **16 automated mathematical verification checks** across all
 
 ---
 
-### Cost of Inaction (COI) & Trend Formulas
-
-When a market exhibits consecutive monthly volume decline, the **Cost of Inaction** represents lost revenue compared to peak run-rate:
-
-$$\text{Linear Slope } m = \frac{n \sum (t \cdot S_t) - \sum t \sum S_t}{n \sum t^2 - (\sum t)^2}$$
-
-$$\text{Cost of Inaction (COI)} = \sum_{t=1}^k \left( \max_{1 \le i \le N}(S_i) - S_t \right)$$
-
----
-
-### Concentration & Volatility Indices (HHI, Peak/Trough)
-
-$$\text{HHI} = \sum_{i=1}^k s_i^2 \quad \text{where } s_i = \frac{\text{Turnover}_i}{\text{Total Market Turnover}}$$
-
-- $\text{HHI} < 0.15$: Diversified / Healthy
-- $0.15 \le \text{HHI} \le 0.25$: Moderate Concentration
-- $\text{HHI} > 0.25$: High Concentration Alert
-- $\text{HHI} \ge 0.80$: **Critical Single-Product / Single-Territory Dependency**
-
-$$\text{Peak-to-Trough Volatility Ratio} = \frac{\max_{m \in M} (\text{Turnover}_m)}{\min_{m \in M} (\text{Turnover}_m)}$$
-
----
-
-### AI Virtual CFO Scorecard Scoring Algorithm
-
-$$\text{Grade Score} = 100 - (10 \times \text{Decline Streaks}) - (0.5 \times \text{Top Combo Share}) - \text{Penalty}_{\text{HHI}}$$
-
-- **Grade A** ($\ge 90$): Zero decline streaks, top combo share $< 20\%$.
-- **Grade B+** ($80 - 89$): Healthy revenue velocity, moderate concentration ($< 40\%$).
-- **Grade B** ($70 - 79$): $\ge 3$ declining markets or top combo $> 40\%$.
-- **Grade C** ($< 70$): Severe multi-market decline, heavy concentration ($> 60\%$).
-
----
-
-## 6. Modular Codebase Organization
+## 7. Modular Codebase Organization
 
 ```text
 backend/
+├── data/                                # SQLite data directory (*.sqlite, *.db)
 ├── src/
 │   ├── analytics/                       # Decision Intelligence Suite (160 Analyses)
 │   │   ├── compute/                     # 18 Lens calculation engines
-│   │   │   ├── comparison/              # Lens 7, 8, 13 (Head-to-head & ranks)
-│   │   │   ├── concentration/           # Lens 4, 9, 10 (HHI & Pareto 80/20)
-│   │   │   ├── contribution/            # Lens 11, 12 (Waterfall bridges)
-│   │   │   ├── coverage/                # Lens 2, 3 (Geographic reference)
-│   │   │   ├── shared/                  # 3D Analytics Cube builder & CV01-CV16
-│   │   │   ├── trend/                   # Lens 0, 1, 5, 6, 14 (Slopes & momentum)
-│   │   │   └── volatility/              # Lens 15, 16, 17 (Peak/Trough & Actions)
 │   │   ├── dashboards/                  # Role-tailored views (Owner, Sales Mgr)
 │   │   ├── engine/                      # Registry, Catalog, Evaluator, Runner
 │   │   ├── models/                      # Standard Analysis Block schema contracts
-│   │   ├── prescriptive/                # Prescriptive action protocols
-│   │   └── index.js                     # Analytics public API barrel
+│   │   └── prescriptive/                # Prescriptive action protocols
 │   │
-│   ├── config/                          # Environment variables & DB connection
-│   │   ├── db.js
-│   │   └── env.js
-│   │
-│   ├── constants/                       # Failure codes, enums, trigger bands
-│   │   └── domain.constants.js
+│   ├── config/                          # Environment variables & Sequelize DB connection
+│   │   ├── db.js                        # Sequelize SQL initialization (SQLite/PostgreSQL)
+│   │   └── env.js                       # Validated environment configuration
 │   │
 │   ├── controllers/                     # Pure Function-Based HTTP Controllers
-│   │   ├── authController.js            # User authentication & OTP verification
-│   │   ├── cloudController.js           # Cloud hub synchronization
+│   │   ├── authController.js            # User authentication
 │   │   ├── companiesController.js       # Company masters, registers & analytics
 │   │   ├── diagnosticsController.js     # Health probe & live diagnostics
-│   │   ├── experimentsController.js     # Protocol & payload test experiments
-│   │   ├── factSalesController.js       # FactSales pipeline controller
 │   │   ├── settingsController.js        # Dynamic Tally endpoint configuration
-│   │   ├── syncController.js            # MongoDB local mirror sync triggers
-│   │   ├── tallyController.js           # Tally gateway controller
-│   │   └── index.js
-│   │
-│   ├── errors/                          # Domain error hierarchy
-│   │   └── index.js
+│   │   ├── syncController.js            # SQL local mirror sync triggers
+│   │   └── tallyController.js           # Tally gateway controller
 │   │
 │   ├── integrations/                    # Tally Loopback & Protocol Drivers
 │   │   └── tally/
-│   │       ├── canonical/               # Schema converters & reconciliation engine
-│   │       ├── sales/                   # FactSales pipeline & City parser
-│   │       └── transports/              # XML, JSON, JSONEx drivers
+│   │       ├── canonical/               # Normalizers & reconciliation engine
+│   │       ├── catalog/                 # 63 API Explorer endpoint catalog
+│   │       ├── parsers/                 # Typed JSON & XML parsers
+│   │       ├── requests/                # Native JSON & XML request builders
+│   │       ├── transports/              # JSON, XML, JSONEx HTTP clients
+│   │       └── tallyExplorer.service.js # High-level API Explorer extraction service
 │   │
-│   ├── jobs/                            # Auto-sync background daemons
+│   ├── jobs/                            # Auto-sync background daemon
 │   │   └── tallySync.job.js
 │   │
-│   ├── models/                          # Dedicated Mongoose Mirror Models
-│   │   ├── companyModel.js
-│   │   ├── syncStateModel.js
-│   │   ├── voucherModel.js
-│   │   ├── ledgerModel.js
-│   │   ├── groupModel.js
-│   │   ├── stockItemModel.js
-│   │   ├── stockGroupModel.js
-│   │   ├── stockCategoryModel.js
-│   │   ├── unitModel.js
-│   │   ├── godownModel.js
-│   │   ├── costCentreModel.js
-│   │   ├── costCategoryModel.js
-│   │   ├── voucherTypeModel.js
-│   │   ├── currencyModel.js
-│   │   ├── mirrorModel.factory.js
-│   │   └── index.js
+│   ├── models/                          # Relational Sequelize SQL Models
+│   │   ├── companyModel.js              # companies table
+│   │   ├── userModel.js                 # users table
+│   │   ├── syncStateModel.js            # sync_states table
+│   │   ├── systemSettingsModel.js       # system_settings table
+│   │   ├── voucherModel.js              # vouchers table
+│   │   ├── mirrorModel.factory.js       # 11 dynamic master domain tables
+│   │   └── sqlModelCompat.js            # Backward-compatibility query layer
 │   │
 │   ├── routes/                          # Express Router Modules
-│   │   ├── authRoutes.js
-│   │   ├── cloudRoutes.js
 │   │   ├── companiesRoutes.js
-│   │   ├── diagnosticsRoutes.js
-│   │   ├── experimentsRoutes.js
-│   │   ├── settingsRoutes.js
 │   │   ├── syncRoutes.js
 │   │   ├── tallyRoutes.js
 │   │   └── index.js
 │   │
-│   ├── services/                        # Function-Based Business Services
-│   │   ├── companyDataService.js
-│   │   ├── companyScopeService.js
-│   │   ├── dashboardService.js
-│   │   ├── diagnosticsService.js
-│   │   ├── mirrorService.js
-│   │   ├── syncEngineService.js
-│   │   ├── tallyClientService.js
-│   │   ├── tallyProbeService.js
-│   │   ├── spoolService.js
-│   │   ├── spoolCryptoService.js
-│   │   └── index.js
+│   ├── scripts/                         # Verification & demo execution scripts
+│   │   ├── testTallyJsonExtraction.js   # Live report & collection JSON extraction
+│   │   └── demoTallyApiExplorerPull.js  # Complete 63-endpoint category pull runner
 │   │
-│   ├── utils/                           # Precision Math, Checksums, Logger
-│   │   ├── financialDecimal.js
-│   │   ├── checksum.js
-│   │   └── logger.js
+│   ├── services/                        # Business Logic Services
+│   │   ├── companyData.service.js
+│   │   ├── companyScope.service.js
+│   │   ├── dashboard.service.js
+│   │   ├── report5Analytics.service.js
+│   │   └── sync/                        # Mirror, CDC & deletion detection
 │   │
-│   ├── validations/                     # Zod runtime payload validators
-│   │   └── index.js
-│   │
-│   └── server.js                        # Express bootstrap & process lifecycle guards
+│   └── server.js                        # Express bootstrap & process lifecycle
 │
-├── tests/                               # 32 Jest Test Suites (1,086 Tests Passed)
+├── tests/                               # 35 Jest Test Suites (1,105 Tests Passed)
 ├── package.json
 └── README.md
 ```
 
 ---
 
-## 7. Complete REST API Reference (50+ Endpoints)
+## 8. Complete REST API Reference (50+ Endpoints)
 
 ### 1. Root & System Health
 - `GET /` — Root API manifest, operational status & target Tally host/port
 - `GET /api/health` — Backend service health, version, and server timestamp
 
 ### 2. Authentication & Profile (`/api/auth`)
-- `POST /api/auth/send-otp` — Request 6-digit OTP for email/phone login
-- `POST /api/auth/verify-otp` — Verify OTP and issue JWT session token
-- `POST /api/auth/register` — Register a new enterprise user organization
-- `GET /api/auth/me` — Current authenticated user profile
-- `POST /api/auth/logout` — Revoke session token
+- `POST /api/auth/send-otp` — Request 6-digit OTP
+- `POST /api/auth/verify-otp` — Verify OTP and issue JWT token
+- `GET /api/auth/me` — Authenticated user profile
 
 ### 3. Tally Integration & Gateway (`/api/tally`)
 - `GET /api/tally/health` — Probe TallyPrime HTTP port reachability
 - `GET /api/tally/status` — Tally latency and active company status
 - `GET /api/tally/capabilities` — Protocol support matrix (XML, JSON, JSONEx)
 - `GET /api/tally/company` — Discovered loaded companies in TallyPrime
-- `GET /api/tally/masters` — Full master extraction test
-- `GET /api/tally/transport` — Active transport protocol mode
-- `GET /api/factsales` — Read-only FACT_SALES ingestion pipeline test
 
 ### 4. Settings & Tally Endpoint Config (`/api/settings`)
 - `GET /api/settings/tally` — Current configured Tally host, port, and connection flags
@@ -472,71 +403,60 @@ backend/
 - `GET /api/companies` — List all open & mirrored companies (`?force=1` for live refresh)
 - `GET /api/companies/:companyId` — Detailed company metadata & capability map
 - `GET /api/companies/:companyId/overview` — Summary counts (ledgers, stock items, vouchers)
-- `GET /api/companies/:companyId/readiness` — Readiness assessment tier (T0 to T4)
 - `GET /api/companies/:companyId/ledgers` — Paginated ledger master list
-- `GET /api/companies/:companyId/ledgers/:ledgerId` — Single ledger details
 - `GET /api/companies/:companyId/groups` — Account groups hierarchy
 - `GET /api/companies/:companyId/stock-items` — Inventory item masters
-- `GET /api/companies/:companyId/stock-items/:stockItemId` — Single stock item details
-- `GET /api/companies/:companyId/stock-groups` — Hierarchical stock group tree
-- `GET /api/companies/:companyId/cost-centres` — Cost centres & sales reps
-- `GET /api/companies/:companyId/godowns` — Warehouses & Godowns
+- `GET /api/companies/:companyId/stock-groups` — Stock group tree
 - `GET /api/companies/:companyId/units` — Measurement units
 - `GET /api/companies/:companyId/voucher-types` — Voucher types
-- `GET /api/companies/:companyId/customers` — Sundry Debtors (Customers)
-- `GET /api/companies/:companyId/suppliers` — Sundry Creditors (Suppliers)
 
 ### 6. Transactions & Core Financial Analysis (`/api/companies/:companyId`)
 - `GET /api/companies/:companyId/vouchers` — Paginated vouchers with line items
-- `GET /api/companies/:companyId/vouchers/:voucherId` — Full voucher line entries
 - `GET /api/companies/:companyId/sales-analysis` — Multi-dimensional sales analysis
 - `GET /api/companies/:companyId/purchase-analysis` — Procurement analysis
 - `GET /api/companies/:companyId/dashboard` — Aggregated executive dashboard KPIs
 - `GET /api/companies/:companyId/reconciliation-report` — Tally Trial Balance reconciliation
 - `GET /api/companies/:companyId/reports/report5` — MIS Report 5 (18 Lens Matrix Engine)
-- `GET /api/companies/:companyId/mis-report-5` — Alias for Report 5
 
 ### 7. Decision Intelligence Layer (160 Analyses)
 - `GET /api/companies/reports/report5/analytics/catalog` — Complete metadata index of all 160 analyses
-- `GET /api/companies/:companyId/reports/report5/analytics/catalog` — Company-scoped catalog index
-- `GET /api/companies/:companyId/reports/report5/analytics/dashboards` — Role-tailored dashboards (`ownerTop5`, `salesManagerTop10`, etc.)
+- `GET /api/companies/:companyId/reports/report5/analytics/dashboards` — Role-tailored dashboards (`ownerTop5`, `salesManagerTop10`)
 - `GET /api/companies/:companyId/reports/report5/analytics/verification` — Automated CV01–CV16 cross-verification report
-- `GET /api/companies/:companyId/reports/report5/analytics` — Run all 18 lenses / 160 analyses with status filters (`?lens=1`, `?status=RED`)
+- `GET /api/companies/:companyId/reports/report5/analytics` — Run all 18 lenses / 160 analyses with status filters
 
-### 8. Diagnostics & System Self-Test (`/api/diagnostics`)
-- `GET /api/diagnostics` — Full integration diagnostic test suite
-- `GET /api/diagnostics/logs` — In-memory diagnostic event stream
-
-### 9. MongoDB Local Mirror Sync (`/api/sync`)
+### 8. SQL Database Mirror & Sync (`/api/sync`)
 - `GET /api/sync/status` — Auto-sync loop state, tick statistics, and collection sync outcomes
 - `POST /api/sync/run` — Trigger immediate manual sync cycle
-- `GET /api/sync/companies` — Mirrored companies in MongoDB
-- `GET /api/sync/:companyId/counts` — Record counts per mirrored collection
-
-### 10. Cloud Synchronization (`/api/cloud`)
-- `GET /api/cloud/status` — Cloud hub sync readiness & spool state
+- `GET /api/sync/companies` — Mirrored companies in SQL database
+- `GET /api/sync/:companyId/counts` — Record counts per mirrored table
 
 ---
 
-## 8. Configuration & Environment Variables (.env)
+## 9. Configuration & Environment Variables (.env)
 
 ```ini
 PORT=5000
 NODE_ENV=development
 
-# TallyPrime Bridge Target
+# TallyPrime Bridge Target (HTTP Loopback)
 TALLY_HOST=127.0.0.1
 TALLY_PORT=9000
-TALLY_TIMEOUT_MS=10000
+TALLY_TIMEOUT_MS=120000
+TALLY_PROBE_TIMEOUT_MS=8000
 
-# MongoDB Local Mirror
-MONGODB_ENABLED=true
-MONGODB_URI=mongodb://127.0.0.1:27017/cfo_yantra
+# Relational SQL Database Mirror (Sequelize)
+DB_ENABLED=true
+DATABASE_URL=sqlite:./data/cfo_yantra.sqlite
+# For PostgreSQL: DATABASE_URL=postgres://user:password@localhost:5432/cfo_yantra
+DB_LOGGING=false
+DB_CONNECT_TIMEOUT_MS=10000
 
 # Background Auto-Sync Daemon
 SYNC_ENABLED=true
-SYNC_INTERVAL_MS=60000
+SYNC_INTERVAL_MS=300000
+SYNC_START_DELAY_MS=5000
 SYNC_VOUCHERS=true
+SYNC_VOUCHER_ENTRIES=true
 
 # Logging
 LOG_LEVEL=info
@@ -544,26 +464,34 @@ LOG_LEVEL=info
 
 ---
 
-## 9. Verification, Testing & Diagnostics
+## 10. Verification, Testing & Diagnostics
 
 ### Run All Automated Tests
 ```powershell
 npm test
 ```
-- **Test Suite Results**: **32 Test Suites, 1,086 Tests Passed (100% Pass Rate)**
+- **Test Suite Results**: **35 Test Suites, 1,105 Tests Passed (100% Pass Rate)**
 - **Coverage**:
+  - TallyPrime API Explorer Complete 63-Endpoint Catalog
+  - Native JSON Request Builders & Typed JSON Normalizer
+  - Relational SQL Database Mirroring & Atomic Upserts
   - Canonical Master Parsers & Normalizers
-  - High-Precision Decimal Math & Rounding
+  - High-Precision Decimal Math & Banker's Rounding
   - Full Voucher Deconstruction & Tax Reconciliation
   - In-Memory 3D Analytics Cube Builder
   - 18 Analytical Lenses & 160 Decision Intelligence Blocks
   - CV01–CV16 Mathematical Cross-Verification Matrix
-  - MongoDB Local Mirror Sync, SHA-256 Hashing & Tombstoning
   - Multi-Company Tenant Scoping & Fallback Resilience
 
-### Test Server Startup
+### Code Linting
 ```powershell
-node -e "const app = require('./src/server'); console.log('Server loaded successfully'); process.exit(0);"
+npm run lint
+```
+*(0 errors, 0 warnings)*
+
+### Run Tally API Explorer Extraction Demo
+```powershell
+node src/scripts/demoTallyApiExplorerPull.js
 ```
 
 ### Start Development Server

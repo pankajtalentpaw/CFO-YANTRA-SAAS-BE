@@ -75,7 +75,8 @@ async function getAnalyticsForLens(company, options = {}) {
 
   const cube = buildAnalyticsCube(context.factResult.rows || [], {
     fromDate: options.fromDate,
-    toDate: options.toDate
+    toDate: options.toDate,
+    measure: options.measure
   });
 
   const { lensId, analysisId } = options;
@@ -124,7 +125,8 @@ async function getAnalyticsDashboards(company, options = {}) {
 
   const cube = buildAnalyticsCube(context.factResult.rows || [], {
     fromDate: options.fromDate,
-    toDate: options.toDate
+    toDate: options.toDate,
+    measure: options.measure
   });
 
   const dashboards = getDashboards(cube);
@@ -152,7 +154,8 @@ async function getAnalyticsVerification(company, options = {}) {
 
   const cube = buildAnalyticsCube(context.factResult.rows || [], {
     fromDate: options.fromDate,
-    toDate: options.toDate
+    toDate: options.toDate,
+    measure: options.measure
   });
 
   const verification = verifyCube(cube);

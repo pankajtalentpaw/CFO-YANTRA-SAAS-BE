@@ -76,7 +76,7 @@ async function loginWithOtp(rawMobile, otp) {
   }
 
   // Find or create user
-  let user = await User.findOne({ mobile });
+  let user = await User.findOne({ where: { mobile } });
   if (!user) {
     user = await User.create({
       mobile,
@@ -92,7 +92,7 @@ async function loginWithOtp(rawMobile, otp) {
   }
 
   const token = generateToken({
-    id: user._id.toString(),
+    id: String(user.id),
     mobile: user.mobile,
     role: user.role
   });
@@ -101,7 +101,7 @@ async function loginWithOtp(rawMobile, otp) {
     success: true,
     token,
     user: {
-      id: user._id.toString(),
+      id: String(user.id),
       mobile: user.mobile,
       fullName: user.fullName || `User ${mobile.slice(-4)}`,
       email: user.email || null,
@@ -129,7 +129,7 @@ async function registerWithOtp({ fullName, mobile: rawMobile, email }, otp) {
   }
 
   // Check if user already exists
-  let user = await User.findOne({ mobile });
+  let user = await User.findOne({ where: { mobile } });
   if (user) {
     // Update existing user details
     user.fullName = fullName.trim();
@@ -150,7 +150,7 @@ async function registerWithOtp({ fullName, mobile: rawMobile, email }, otp) {
   }
 
   const token = generateToken({
-    id: user._id.toString(),
+    id: String(user.id),
     mobile: user.mobile,
     role: user.role
   });
@@ -159,7 +159,7 @@ async function registerWithOtp({ fullName, mobile: rawMobile, email }, otp) {
     success: true,
     token,
     user: {
-      id: user._id.toString(),
+      id: String(user.id),
       mobile: user.mobile,
       fullName: user.fullName,
       email: user.email || null,
@@ -172,7 +172,7 @@ async function registerWithOtp({ fullName, mobile: rawMobile, email }, otp) {
  * Retrieve user by ID
  */
 async function getUserById(userId) {
-  return User.findById(userId).select("-__v").lean();
+  return User.findByPk(userId, { raw: true });
 }
 
 module.exports = {

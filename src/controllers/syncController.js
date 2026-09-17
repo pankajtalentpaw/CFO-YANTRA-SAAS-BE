@@ -40,9 +40,9 @@ async function getSyncStatus(req, res) {
   return res.json({
     status: connected ? (job.running ? "SYNCING" : "READY") : "MIRROR_UNAVAILABLE",
     mirror: {
-      enabled: env.mongo.enabled,
+      enabled: env.db.enabled,
       connected,
-      uri: redactUri(env.mongo.uri),
+      uri: redactUri(env.db.url),
       lastError: getLastError()
     },
     autoSync: {
@@ -69,7 +69,7 @@ async function runSyncNow(req, res) {
     return res.status(503).json({
       success: false,
       error: "Local mirror is not connected",
-      hint: "Start MongoDB and check MONGODB_URI in backend/.env"
+      hint: "Check database service and DATABASE_URL in backend/.env"
     });
   }
 
@@ -85,7 +85,7 @@ async function getMirroredCompanies(req, res) {
   if (!isConnected()) {
     return res.status(503).json({ success: false, error: "Local mirror is not connected" });
   }
-  const companies = await Company.find({}).lean();
+  const companies = await Company.findAll({ raw: true });
   return res.json({
     success: true,
     count: companies.length,

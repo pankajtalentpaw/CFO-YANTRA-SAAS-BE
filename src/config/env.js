@@ -28,8 +28,19 @@ try {
   process.exit(1);
 }
 
+const dbConfig = {
+  enabled: parsedEnv.DB_ENABLED,
+  url: parsedEnv.DATABASE_URL,
+  dialect: parsedEnv.DB_DIALECT,
+  connectTimeoutMs: parsedEnv.DB_CONNECT_TIMEOUT_MS,
+  logging: parsedEnv.DB_LOGGING
+};
+
 module.exports = {
   nodeEnv: parsedEnv.NODE_ENV,
+  server: {
+    port: parsedEnv.PORT
+  },
   tally: {
     host: parsedEnv.TALLY_HOST,
     port: parsedEnv.TALLY_PORT,
@@ -38,10 +49,18 @@ module.exports = {
     companyName: parsedEnv.TALLY_COMPANY_NAME
   },
   logLevel: parsedEnv.LOG_LEVEL,
+  db: dbConfig,
+  // Backwards compatibility alias for services/tests referencing env.mongo
   mongo: {
-    enabled: parsedEnv.MONGODB_ENABLED,
-    uri: parsedEnv.MONGODB_URI,
-    serverSelectionTimeoutMs: parsedEnv.MONGODB_SERVER_SELECTION_TIMEOUT_MS
+    get enabled() {
+      return dbConfig.enabled;
+    },
+    get uri() {
+      return dbConfig.url;
+    },
+    get serverSelectionTimeoutMs() {
+      return dbConfig.connectTimeoutMs;
+    }
   },
   sync: {
     enabled: parsedEnv.SYNC_ENABLED,

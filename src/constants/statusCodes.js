@@ -65,7 +65,7 @@ const APP_ERROR_CODES = Object.freeze({
   TALLY_INVALID_TDL: "TALLY_INVALID_TDL",
   TALLY_PARSE_ERROR: "TALLY_PARSE_ERROR",
 
-  // Database / MongoDB Mirror Errors
+  // Database / SQL Mirror Errors
   DB_CONNECTION_FAILED: "DB_CONNECTION_FAILED",
   DB_QUERY_FAILED: "DB_QUERY_FAILED",
   DB_SYNC_FAILED: "DB_SYNC_FAILED",
@@ -157,16 +157,16 @@ const ERROR_PLAN = Object.freeze({
     httpStatus: HTTP_STATUS.SERVICE_UNAVAILABLE,
     severity: "HIGH",
     retryable: true,
-    diagnosticHint: "MongoDB Atlas or local instance connection failed or timed out.",
-    actionPlan: "1. Verify MONGODB_URI format.\n2. Check network whitelist in MongoDB Atlas.\n3. Verify DNS resolution for SRV records.",
-    userAction: "System has fallen back to live Tally reads. Check MongoDB Atlas connectivity & IP access list."
+    diagnosticHint: "SQL database connection failed or timed out.",
+    actionPlan: "1. Verify DATABASE_URL format.\n2. Check database server service.\n3. Verify network access and credentials.",
+    userAction: "System has fallen back to live Tally reads. Check database service and DATABASE_URL."
   },
   [APP_ERROR_CODES.DB_SYNC_FAILED]: {
     httpStatus: HTTP_STATUS.INTERNAL_SERVER_ERROR,
     severity: "MEDIUM",
     retryable: true,
-    diagnosticHint: "An error occurred while writing mirrored company records to MongoDB collections.",
-    actionPlan: "Inspect sync log details in /api/sync/status. Check MongoDB schema and collection write locks.",
+    diagnosticHint: "An error occurred while writing mirrored company records to database tables.",
+    actionPlan: "Inspect sync log details in /api/sync/status. Check database schema and table write locks.",
     userAction: "Trigger manual sync from Settings > Sync or wait for the next scheduled auto-sync tick."
   },
   [APP_ERROR_CODES.INTERNAL_SERVER_ERROR]: {

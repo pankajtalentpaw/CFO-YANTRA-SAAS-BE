@@ -7,7 +7,7 @@ const { connectDatabase, disconnectDatabase } = require("./config/db");
 const tallySyncJob = require("./jobs/tallySync.job");
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = env.server.port;
 
 const { apiVersionMiddleware } = require("./versioning");
 const { HTTP_STATUS, APP_ERROR_CODES, createErrorPayload } = require("./constants/statusCodes");

@@ -1,6 +1,10 @@
 ;; ====================================================================
 ;; CFO Yantra Real-Time Event Hook for TallyPrime (Turbo Mode)
 ;; Load in Tally Prime: F1 (Help) -> TDLs & Add-ons -> F4 (Manage Local TDLs)
+;;
+;; IMPORTANT: Update the URL below to match your backend server.
+;; Default: http://127.0.0.1:5000  (backend PORT env variable, default 5000)
+;; If you changed PORT in .env, update the URL below accordingly.
 ;; ====================================================================
 
 [#Form: Voucher]

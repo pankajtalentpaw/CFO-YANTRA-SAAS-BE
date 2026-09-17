@@ -8,7 +8,7 @@ const companyData = require("../companyData.service");
 const { listCompanies } = require("../companyScope.service");
 
 /**
- * Pulls open companies out of TallyPrime and mirrors them into MongoDB.
+ * Pulls open companies out of TallyPrime and mirrors them into SQL database.
  *
  * Extraction deliberately goes through companyData.extract() rather than
  * getDomain(): getDomain is DB-first, so using it here would read the mirror
@@ -33,20 +33,17 @@ async function syncCompany(company, runId = newRunId()) {
   let changedRecords = 0;
   let failures = 0;
 
-  await SyncState.updateOne(
-    { companyId: company.companyId },
-    {
-      $set: {
-        companyId: company.companyId,
-        companyName: company.name,
-        status: "RUNNING",
-        lastRunId: runId,
-        lastStartedAt: startedAt
-      },
-      $inc: { runCount: 1 }
-    },
-    { upsert: true }
-  );
+  const existingState = await SyncState.findByPk(company.companyId);
+  const runCount = existingState ? (existingState.runCount || 0) + 1 : 1;
+
+  await SyncState.upsert({
+    companyId: company.companyId,
+    companyName: company.name,
+    status: "RUNNING",
+    lastRunId: runId,
+    lastStartedAt: startedAt,
+    runCount
+  });
 
   for (const domain of Object.keys(companyData.DOMAINS)) {
     const domainStart = Date.now();
@@ -123,7 +120,12 @@ async function syncCompany(company, runId = newRunId()) {
   };
   if (status !== "FAILED") update.lastSuccessAt = finishedAt;
 
-  await SyncState.updateOne({ companyId: company.companyId }, { $set: update }, { upsert: true });
+  await SyncState.upsert({
+    companyId: company.companyId,
+    companyName: company.name,
+    runCount,
+    ...update
+  });
 
   logger.info(
     {

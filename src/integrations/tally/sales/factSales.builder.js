@@ -123,10 +123,48 @@ function classifyLedgerRole(ledgerName, partyLedgerName = "") {
 }
 
 /**
+ * The non-product money on one voucher: GST, freight, round-off and discount.
+ *
+ * Read through this file's own classifier rather than the sales engine's, for
+ * the same reason classifyLedgerRole is duplicated above — a FACT_SALES row must
+ * not depend on another engine's internals, and the two classifiers agree.
+ */
+function summariseVoucherCharges(voucher) {
+  const entries = Array.isArray(voucher.ledgerEntries) ? voucher.ledgerEntries : [];
+  const partyName = voucher.partyLedgerName || "";
+
+  let tax = toDecimal(0);
+  let additionalCharges = toDecimal(0);
+  let roundOff = toDecimal(0);
+  let discount = toDecimal(0);
+
+  for (const entry of entries) {
+    if (!entry || !entry.ledgerName) continue;
+    const magnitude = toDecimal(entry.amount || 0).abs();
+    switch (classifyLedgerRole(entry.ledgerName, partyName)) {
+      case "TAX": tax = tax.plus(magnitude); break;
+      case "ADDITIONAL_CHARGES": additionalCharges = additionalCharges.plus(magnitude); break;
+      // Round-off keeps its sign: it is as often a deduction as an addition.
+      case "ROUND_OFF": roundOff = roundOff.plus(toDecimal(entry.amount || 0)); break;
+      case "DISCOUNT": discount = discount.plus(magnitude); break;
+      default: break;
+    }
+  }
+
+  return {
+    tax,
+    additionalCharges,
+    roundOff,
+    discount,
+    chargeLoad: tax.plus(additionalCharges).plus(roundOff).minus(discount)
+  };
+}
+
+/**
  * For accounting/service invoices (no inventory entries), derive the base sales
  * amount and a product name from the voucher's ledger entries.
  *
- * Returns { salesAmount: string, productName: string } — both always present.
+ * Returns { salesAmount, salesAmountWithCharges, productName } — all present.
  */
 function deriveAccountingInvoiceFields(voucher) {
   const entries = Array.isArray(voucher.ledgerEntries) ? voucher.ledgerEntries : [];
@@ -134,6 +172,7 @@ function deriveAccountingInvoiceFields(voucher) {
 
   let baseLedgerName = null;
   let baseAmount = toDecimal(0);
+  let usedVoucherTotal = false;
 
   for (const entry of entries) {
     if (!entry || !entry.ledgerName) continue;
@@ -149,10 +188,18 @@ function deriveAccountingInvoiceFields(voucher) {
   // minus taxes as a best-effort approximation.
   if (baseAmount.isZero() && voucher.amount) {
     baseAmount = toDecimal(voucher.amount).abs();
+    usedVoucherTotal = true;
   }
+
+  // The voucher total already carries the charges, so loading them on again
+  // there would count the GST twice.
+  const withCharges = usedVoucherTotal
+    ? baseAmount
+    : baseAmount.plus(summariseVoucherCharges(voucher).chargeLoad);
 
   return {
     salesAmount: toDecimalString(baseAmount),
+    salesAmountWithCharges: toDecimalString(withCharges),
     productName: baseLedgerName || "(Service / Accounting Invoice)"
   };
 }
@@ -258,7 +305,7 @@ function buildFactSales(input) {
         partyLedger ? partyLedger.sourceObjectId : null
       );
 
-      const { salesAmount, productName } = deriveAccountingInvoiceFields(voucher);
+      const { salesAmount, salesAmountWithCharges, productName } = deriveAccountingInvoiceFields(voucher);
       const salesman = resolveSalesman(null, voucher, costCentreIndex, companyId, costCentresEnabled);
 
       // Synthesized entry ID for accounting invoices
@@ -283,6 +330,7 @@ function buildFactSales(input) {
         MonthNum: monthNum,
         Customer: voucher.partyLedgerName || null,
         SalesAmount: salesAmount,
+        SalesAmountWithCharges: salesAmountWithCharges,
         Category: "Service",
         SubCategory: productName,
         Salesman: salesman.salesman,
@@ -349,6 +397,15 @@ function buildFactSales(input) {
       partyLedger ? partyLedger.sourceObjectId : null
     );
 
+    // Each stock line carries its share of the voucher's GST and charges, split
+    // by line value — the same pro-rata split the sales engine applies. Without
+    // it the MIS could only ever be read one way, excluding charges.
+    const { chargeLoad } = summariseVoucherCharges(voucher);
+    const lineValueTotal = voucher.inventoryEntries.reduce(
+      (sum, line) => sum.plus(toDecimal((line && line.amount) || 0).abs()),
+      toDecimal(0)
+    );
+
     for (const entry of voucher.inventoryEntries) {
       const rowQuality = [...voucherQuality, ...classification.reasons];
       if (!state) rowQuality.push(DATA_QUALITY_REASONS.STATE_NOT_AVAILABLE);
@@ -375,6 +432,11 @@ function buildFactSales(input) {
       }
       seenRowIds.add(rowId);
 
+      const entryAmount = toDecimal(entry.amount || 0);
+      const lineShare = lineValueTotal.isZero()
+        ? toDecimal(1).dividedBy(voucher.inventoryEntries.length || 1)
+        : entryAmount.abs().dividedBy(lineValueTotal);
+
       rows.push({
         // --- public FACT_SALES contract ---
         RowID: rowId,
@@ -382,6 +444,7 @@ function buildFactSales(input) {
         MonthNum: monthNum,
         Customer: voucher.partyLedgerName || null,
         SalesAmount: entry.amount,
+        SalesAmountWithCharges: toDecimalString(entryAmount.plus(chargeLoad.times(lineShare))),
         Category: category,
         SubCategory: stockItem ? stockItem.name : entry.stockItemName || null,
         Salesman: salesman.salesman,
@@ -419,6 +482,10 @@ function buildFactSales(input) {
   }
 
   const total = rows.reduce((sum, row) => sum.plus(toDecimal(row.SalesAmount)), toDecimal(0));
+  const totalWithCharges = rows.reduce(
+    (sum, row) => sum.plus(toDecimal(row.SalesAmountWithCharges || row.SalesAmount)),
+    toDecimal(0)
+  );
   let grossVoucherTotal = toDecimal(0);
   validSalesVouchers.forEach((v) => {
     grossVoucherTotal = grossVoucherTotal.plus(toDecimal(v.amount || 0));
@@ -435,6 +502,7 @@ function buildFactSales(input) {
       rowCount: rows.length,
       rejectedCount: rejected.length,
       totalSalesAmount: toDecimalString(total),
+      totalSalesAmountWithCharges: toDecimalString(totalWithCharges),
       grossVoucherTotal: toDecimalString(grossVoucherTotal)
     }
   };

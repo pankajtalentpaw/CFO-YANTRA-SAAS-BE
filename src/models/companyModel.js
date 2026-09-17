@@ -1,81 +1,205 @@
-const mongoose = require("mongoose");
+const { DataTypes } = require("sequelize");
+const { sequelize } = require("../config/db");
 
 /**
  * A company as discovered and mirrored from TallyPrime.
- *
  * Stores comprehensive legal, statutory, contact, financial period,
- * and feature configuration metadata for complete 360° company profiles.
+ * and feature configuration metadata.
  */
-const companySchema = new mongoose.Schema(
+const Company = sequelize.define(
+  "Company",
   {
-    companyId: { type: String, required: true, unique: true },
-    name: { type: String, default: null },
-    legalName: { type: String, default: null },
-    formalName: { type: String, default: null },
-    guid: { type: String, default: null },
-    masterId: { type: Number, default: null },
-    alterId: { type: Number, default: null },
+    companyId: {
+      type: DataTypes.STRING,
+      primaryKey: true,
+      allowNull: false
+    },
+    name: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    legalName: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    formalName: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    guid: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    masterId: {
+      type: DataTypes.BIGINT,
+      allowNull: true
+    },
+    alterId: {
+      type: DataTypes.BIGINT,
+      allowNull: true
+    },
 
     // Financial periods
-    startingFrom: { type: String, default: null },
-    startingAt: { type: String, default: null },
-    booksFrom: { type: String, default: null },
-    financialYearBeginning: { type: String, default: null },
+    startingFrom: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    startingAt: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    booksFrom: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    financialYearBeginning: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
 
     // Currency & Jurisdiction
-    baseCurrency: { type: String, default: "INR" },
-    country: { type: String, default: "India" },
-    countryName: { type: String, default: "India" },
-    state: { type: String, default: null },
-    stateName: { type: String, default: null },
-    pinCode: { type: String, default: null },
-    address: { type: mongoose.Schema.Types.Mixed, default: null },
+    baseCurrency: {
+      type: DataTypes.STRING,
+      defaultValue: "INR"
+    },
+    country: {
+      type: DataTypes.STRING,
+      defaultValue: "India"
+    },
+    countryName: {
+      type: DataTypes.STRING,
+      defaultValue: "India"
+    },
+    state: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    stateName: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    pinCode: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    address: {
+      type: DataTypes.JSON,
+      allowNull: true
+    },
 
     // Statutory & Tax Registrations
-    gstin: { type: String, default: null },
-    gstRegNo: { type: String, default: null },
-    pan: { type: String, default: null },
-    panCardNo: { type: String, default: null },
-    cin: { type: String, default: null },
-    cinNo: { type: String, default: null },
+    gstin: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    gstRegNo: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    pan: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    panCardNo: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    cin: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    cinNo: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
 
     // Contact details
-    email: { type: String, default: null },
-    phone: { type: String, default: null },
-    phoneNumber: { type: String, default: null },
-    mobile: { type: String, default: null },
-    mobileNo: { type: String, default: null },
+    email: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    phone: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    phoneNumber: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    mobile: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    mobileNo: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
 
-    // Tally Module & Feature Matrix
+    // Feature matrix
     features: {
-      billWise: { type: Boolean, default: false },
-      costCentres: { type: Boolean, default: false },
-      inventory: { type: Boolean, default: true },
-      multiCurrency: { type: Boolean, default: false },
-      payroll: { type: Boolean, default: false },
-      gstApplicable: { type: Boolean, default: false },
-      tdsApplicable: { type: Boolean, default: false },
-      tcsApplicable: { type: Boolean, default: false },
-      batchEnabled: { type: Boolean, default: false },
-      godownEnabled: { type: Boolean, default: false },
-      bomEnabled: { type: Boolean, default: false }
+      type: DataTypes.JSON,
+      defaultValue: {
+        billWise: false,
+        costCentres: false,
+        inventory: true,
+        multiCurrency: false,
+        payroll: false,
+        gstApplicable: false,
+        tdsApplicable: false,
+        tcsApplicable: false,
+        batchEnabled: false,
+        godownEnabled: false,
+        bomEnabled: false
+      }
     },
 
     // Operational state & synchronization
-    isOpen: { type: Boolean, default: true },
-    lastSeenAt: { type: Date, default: Date.now },
-    closedAt: { type: Date, default: null },
-    checksum: { type: String, default: null },
-    syncedAt: { type: Date, default: Date.now },
-    lastRunId: { type: String, default: null }
+    isOpen: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
+    },
+    lastSeenAt: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    },
+    closedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    checksum: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    syncedAt: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    },
+    lastRunId: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    metadata: {
+      type: DataTypes.JSON,
+      allowNull: true
+    }
   },
-  { strict: false, timestamps: true, collection: "companies", minimize: false }
+  {
+    tableName: "companies",
+    timestamps: true,
+    indexes: [
+      {
+        fields: ["isOpen"]
+      },
+      {
+        fields: ["gstin"]
+      },
+      {
+        fields: ["pan"]
+      }
+    ]
+  }
 );
 
-companySchema.index({ isOpen: 1 });
-companySchema.index({ gstin: 1 });
-companySchema.index({ pan: 1 });
+const { attachCompat } = require("./sqlModelCompat");
 
-const Company = mongoose.models.Company || mongoose.model("Company", companySchema);
-
-module.exports = Company;
+module.exports = attachCompat(Company);

@@ -206,6 +206,20 @@ async function resolveCompany(companyId) {
     };
   }
 
+  // Fast path. Resolving an identity does not need a live round trip, and on a
+  // busy Tally that round trip is the single thing standing between a warm
+  // mirror and an instant page: discovery is cached for only two seconds, so
+  // nearly every request used to queue behind the global Tally lock - and a
+  // sync cycle can hold that lock for two minutes (measured: one voucher
+  // extraction ran the full 120s timeout). The mirror already knows who this
+  // company is, and only answers for one Tally last reported open.
+  //
+  // This grants no extraction rights. isCompanyStillOpen() is deliberately
+  // uncached and still runs before anything reaches Tally, so a company closed
+  // since the last sync still cannot be targeted.
+  const mirroredOpen = await mirror.readOpenCompany(companyId);
+  if (mirroredOpen) return { ok: true, company: mirroredOpen, source: "mirror" };
+
   const discovery = await listCompanies();
   if (!discovery.success) {
     // TallyPrime is unreachable. If this company has already been mirrored we

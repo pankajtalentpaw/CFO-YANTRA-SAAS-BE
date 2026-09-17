@@ -5,6 +5,7 @@ const { z } = require("zod");
  */
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  PORT: z.coerce.number().int().min(1).max(65535).default(5000),
   TALLY_HOST: z.string().min(1).default("127.0.0.1"),
   TALLY_PORT: z.coerce.number().int().min(1).max(65535).default(9000),
   TALLY_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(30000),
@@ -12,17 +13,29 @@ const envSchema = z.object({
   TALLY_COMPANY_NAME: z.string().optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 
-  // ---- Local MongoDB mirror ----
-  MONGODB_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
-  MONGODB_URI: z.string().min(1).default("mongodb://127.0.0.1:27017/cfo_yantra").transform((val) => {
-    let clean = val.trim();
-    if (clean.startsWith("MONGODB_URI=")) {
-      clean = clean.replace(/^MONGODB_URI=/, "").trim();
-    }
-    clean = clean.replace(/^["']|["']$/g, "");
-    return clean;
-  }),
-  MONGODB_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().min(100).max(60000).default(3000),
+  // ---- SQL Database Mirror ----
+  DB_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .or(z.boolean())
+    .transform((v) => v === true || v === "true"),
+  MONGODB_ENABLED: z.enum(["true", "false"]).optional(), // legacy alias support
+
+  DATABASE_URL: z
+    .string()
+    .min(1)
+    .default("sqlite:./data/cfo_yantra.sqlite")
+    .transform((val) => {
+      let clean = val.trim();
+      if (clean.startsWith("DATABASE_URL=")) {
+        clean = clean.replace(/^DATABASE_URL=/, "").trim();
+      }
+      clean = clean.replace(/^["']|["']$/g, "");
+      return clean;
+    }),
+  DB_DIALECT: z.enum(["postgres", "sqlite", "mysql"]).optional(),
+  DB_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(100).max(60000).default(5000),
+  DB_LOGGING: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 
   // ---- Live auto-sync ----
   SYNC_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),

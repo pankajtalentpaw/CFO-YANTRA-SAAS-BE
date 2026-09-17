@@ -197,11 +197,15 @@ async function getBestAvailableTransport(options = {}) {
   throw new Error(`Tally is unreachable or no supported transport formats found on ${getTallyUrl(options.host, options.port)}`);
 }
 
+const { sendTallyJson } = require("./transports/tallyJson.client");
+
 module.exports = {
   getTallyUrl,
   breaker,
   checkHeartbeat,
   sendXml,
   testConnection,
-  getBestAvailableTransport
+  getBestAvailableTransport,
+  sendTallyJson
 };
+

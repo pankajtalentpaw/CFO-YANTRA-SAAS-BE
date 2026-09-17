@@ -478,6 +478,7 @@ const getMisReport5 = withCompany(async (req, res, company) => {
   const result = await service.getMisReport5(company, {
     fromDate: query.fromDate,
     toDate: query.toDate,
+    measure: query.measure,
     filterId: query.filterId,
     subCatA: query.subCatA,
     subCatB: query.subCatB,
@@ -511,6 +512,7 @@ const getReport5Analytics = withCompany(async (req, res, company) => {
   const result = await analyticsService.getAnalyticsForLens(company, {
     fromDate: query.fromDate,
     toDate: query.toDate,
+    measure: query.measure,
     lensId: query.lensId,
     analysisId: query.analysisId
   });
@@ -531,7 +533,8 @@ const getReport5AnalyticsDashboards = withCompany(async (req, res, company) => {
 
   const result = await analyticsService.getAnalyticsDashboards(company, {
     fromDate: query.fromDate,
-    toDate: query.toDate
+    toDate: query.toDate,
+    measure: query.measure
   });
 
   if (!result || !result.available) {
@@ -550,7 +553,8 @@ const getReport5AnalyticsVerification = withCompany(async (req, res, company) =>
 
   const result = await analyticsService.getAnalyticsVerification(company, {
     fromDate: query.fromDate,
-    toDate: query.toDate
+    toDate: query.toDate,
+    measure: query.measure
   });
 
   if (!result || !result.available) {

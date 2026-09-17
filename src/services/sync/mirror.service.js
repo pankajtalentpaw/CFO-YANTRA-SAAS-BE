@@ -1,10 +1,11 @@
+const { Op } = require("sequelize");
 const { isConnected } = require("../../config/db");
 const { Company, Voucher, DOMAIN_MODELS } = require("../../models");
 const { logger } = require("../../utils/logger");
 const { recordChecksum } = require("../../utils/checksum");
 
 /**
- * Read/write layer over the local MongoDB mirror.
+ * Read/write layer over the local SQL database mirror.
  *
  * Two rules govern everything here:
  *
@@ -19,20 +20,31 @@ const { recordChecksum } = require("../../utils/checksum");
 // Fields the mirror adds around a canonical record. They are stripped on read
 // so the API keeps returning exactly the canonical shape the parsers produce.
 const ENVELOPE_FIELDS = [
-  "_id", "__v", "companyId", "isDeleted", "deletedAt",
-  "syncedAt", "lastRunId", "createdAt", "updatedAt", "contentHash"
+  "id", "_id", "__v", "companyId", "isDeleted", "deletedAt",
+  "syncedAt", "lastRunId", "createdAt", "updatedAt", "contentHash", "data"
 ];
 
 /**
  * Fields that differ between two extractions of identical data.
  *
- * The parsers stamp every record with an `extractionRunId` derived from the
- * clock and then fold it into their own `checksum`, so that checksum changes
- * on every pull even when nothing in Tally moved. Using it for change
- * detection would rewrite the entire mirror on every tick. The mirror
- * therefore hashes the record itself with these volatile fields removed.
+ * Everything listed here is stamped fresh by the parsers on every read - a run
+ * id, a wall-clock timestamp - and says nothing about whether the record's
+ * content moved. Leaving one out silently defeats change detection: the
+ * canonical sales voucher carries both `syncRunId` and `sourceFetchedAt`, so
+ * every voucher hashed differently on every cycle and all 10,812 of them were
+ * rewritten every five minutes (measured: unchanged=0, updated=10812) on a
+ * company where nothing had actually changed. Masters were unaffected, which
+ * is why the ledger-only test kept passing.
+ *
+ * `alterId` is here for a subtler reason: only the CDC engine stamps it, so the
+ * same voucher hashed one way when CDC wrote it and another when the full sync
+ * did, and the two writers flipped the same 928 records back and forth on every
+ * cycle. It is a version marker, not content - a real alteration always moves
+ * the amount, date, party or entries with it - so ignoring it here costs no
+ * change detection while ending the ping-pong. It is still stored, because the
+ * CDC cursor resumes from it.
  */
-const VOLATILE_FIELDS = ["extractionRunId", "checksum"];
+const VOLATILE_FIELDS = ["extractionRunId", "syncRunId", "sourceFetchedAt", "checksum", "alterId"];
 
 function contentHash(record) {
   const stable = { ...record };
@@ -40,26 +52,37 @@ function contentHash(record) {
   return recordChecksum(stable);
 }
 
+function parseData(data) {
+  if (!data) return {};
+  if (typeof data === "string") {
+    try {
+      return JSON.parse(data);
+    } catch {
+      return {};
+    }
+  }
+  return typeof data === "object" ? { ...data } : {};
+}
+
 function stripEnvelope(doc) {
-  const out = { ...doc };
+  if (!doc) return null;
+  const base = parseData(doc.data);
+  const out = { ...base, ...doc };
   for (const field of ENVELOPE_FIELDS) delete out[field];
+  if (out.isDeleted !== undefined) out.isDeleted = Boolean(out.isDeleted);
   return out;
 }
 
-/**
- * Companies are stripped differently from domain records.
- *
- * A canonical domain record identifies its company through `sourceCompanyId`,
- * so `companyId` there is mirror bookkeeping and gets removed. On a company
- * document `companyId` IS the identity every caller resolves against, so it
- * must survive - dropping it hands back a company with a null id.
- */
-const COMPANY_ENVELOPE_FIELDS = ENVELOPE_FIELDS.filter((f) => f !== "companyId")
-  .concat(["isOpen", "lastSeenAt", "closedAt"]);
+const COMPANY_ENVELOPE_FIELDS = [
+  "id", "_id", "__v", "isOpen", "lastSeenAt", "closedAt",
+  "createdAt", "updatedAt", "metadata"
+];
 
 function stripCompanyEnvelope(doc) {
+  if (!doc) return null;
   const out = { ...doc };
   for (const field of COMPANY_ENVELOPE_FIELDS) delete out[field];
+  if (out.isOpen !== undefined) out.isOpen = Boolean(out.isOpen);
   return out;
 }
 
@@ -69,81 +92,129 @@ function modelForDomain(domain) {
 
 /**
  * Upsert one domain's records for a company, writing only real changes.
- * @returns {{total,inserted,updated,unchanged,tombstoned}}
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.tombstoneMissing=true] Whether `records` is the
+ *   COMPLETE set for this company. Only then does "absent from the list" mean
+ *   "gone from Tally". A caller passing a delta must set this false, or every
+ *   record outside its batch is tombstoned.
+ * @returns {{total,inserted,updated,unchanged,tombstoned,skipped}}
  */
-async function upsertRecords(model, companyId, records, runId) {
+async function upsertRecords(model, companyId, records, runId, { tombstoneMissing = true } = {}) {
   const stats = { total: records.length, inserted: 0, updated: 0, unchanged: 0, tombstoned: 0, skipped: 0 };
 
-  const existing = await model
-    .find({ companyId }, { sourceObjectId: 1, contentHash: 1, isDeleted: 1 })
-    .lean();
+  const existing = await model.findAll({
+    where: { companyId },
+    attributes: ["sourceObjectId", "contentHash", "isDeleted"],
+    raw: true
+  });
   const known = new Map(existing.map((d) => [d.sourceObjectId, d]));
 
   const now = new Date();
-  const ops = [];
   const seen = new Set();
+  const toUpsert = [];
 
   for (const record of records) {
     const sourceObjectId = record && record.sourceObjectId;
-    // A record the parser could not key cannot be mirrored deterministically.
-    // Counted, not just dropped: an unkeyed record used to vanish here while
-    // `total` still reported it as read, so a domain that mirrored nothing at
-    // all still looked like a clean sync.
-    if (!sourceObjectId) { stats.skipped++; continue; }
+    if (!sourceObjectId) {
+      stats.skipped++;
+      continue;
+    }
     seen.add(sourceObjectId);
 
     const prior = known.get(sourceObjectId);
     const hash = contentHash(record);
+
     // Unchanged and not tombstoned: nothing to write.
     if (prior && prior.contentHash && prior.contentHash === hash && !prior.isDeleted) {
       stats.unchanged++;
       continue;
     }
 
-    ops.push({
-      updateOne: {
-        filter: { companyId, sourceObjectId },
-        update: {
-          $set: {
-            ...record,
-            companyId,
-            sourceObjectId,
-            contentHash: hash,
-            isDeleted: false,
-            deletedAt: null,
-            syncedAt: now,
-            lastRunId: runId
-          }
-        },
-        upsert: true
-      }
-    });
+    const payload = {
+      ...record,
+      companyId,
+      sourceObjectId,
+      objectType: record.objectType || (model.options && model.options.name ? model.options.name.singular : model.name),
+      name: record.name || null,
+      parent: record.parent || null,
+      checksum: record.checksum || null,
+      contentHash: hash,
+      isDeleted: false,
+      deletedAt: null,
+      syncedAt: now,
+      lastRunId: runId,
+      data: record
+    };
+
+    if (model.name === "Voucher") {
+      // voucherDate is the column the register, the dashboard and every date
+      // window filter on, so a null here makes the voucher invisible even
+      // though the row is present and correct. Fall back through every shape a
+      // voucher has ever been written in rather than trust one of them.
+      const header = record.header || {};
+      payload.voucherDate = record.voucherDate || record.date || header.date || null;
+      payload.sourceVoucherNumber =
+        record.sourceVoucherNumber || record.voucherNumber || header.voucherNumber || null;
+      payload.header = record.header || null;
+      payload.entries = record.entries || null;
+    }
+
+    toUpsert.push(payload);
     if (prior) stats.updated++;
     else stats.inserted++;
   }
 
-  // Tally exposes no delete feed, so anything that stopped appearing is
-  // tombstoned rather than dropped. History and audit trails stay intact.
-  const vanished = existing
-    .filter((d) => !d.isDeleted && !seen.has(d.sourceObjectId))
-    .map((d) => d.sourceObjectId);
+  /*
+   * Tally exposes no delete feed, so anything that stopped appearing is
+   * tombstoned rather than dropped. History and audit trails stay intact.
+   *
+   * This is only sound when `records` is the whole set. The CDC engine writes
+   * an incremental batch - the vouchers whose AlterId moved - and passing that
+   * through here tombstoned the entire register except the delta on every tick:
+   * 2,412 live vouchers were struck off in a single CDC run, and a company
+   * mirrored only by CDC read back as completely empty.
+   */
+  const vanished = tombstoneMissing
+    ? existing.filter((d) => !d.isDeleted && !seen.has(d.sourceObjectId)).map((d) => d.sourceObjectId)
+    : [];
+
+  /*
+   * Even on a complete set, refuse an implausible mass tombstoning. A read that
+   * succeeds but returns a truncated collection is indistinguishable here from
+   * a company that genuinely deleted its history, and the destructive reading
+   * of that ambiguity is the one that cannot be undone by looking again. The
+   * deletion detector already guards itself this way; this is the same rule at
+   * the other place tombstones are written.
+   */
+  const MAX_TOMBSTONE_RATIO = 0.15;
+  const activeCount = existing.filter((d) => !d.isDeleted).length;
+  const maxAllowed = Math.max(10, Math.floor(activeCount * MAX_TOMBSTONE_RATIO));
+  if (vanished.length > maxAllowed) {
+    logger.warn(
+      { companyId, objectType: model.name, vanished: vanished.length, maxAllowed, activeCount },
+      "Refusing to tombstone an implausible share of records in one pass - treating the read as partial"
+    );
+    vanished.length = 0;
+  }
+
+  if (toUpsert.length > 0) {
+    for (const item of toUpsert) {
+      await model.upsert(item);
+    }
+  }
 
   if (vanished.length > 0) {
-    ops.push({
-      updateMany: {
-        filter: { companyId, sourceObjectId: { $in: vanished } },
-        update: { $set: { isDeleted: true, deletedAt: now, lastRunId: runId } }
-      }
-    });
+    await model.update(
+      { isDeleted: true, deletedAt: now, lastRunId: runId },
+      { where: { companyId, sourceObjectId: { [Op.in]: vanished } } }
+    );
     stats.tombstoned = vanished.length;
   }
 
-  if (ops.length > 0) {
-    await model.bulkWrite(ops, { ordered: false });
-  }
   if (stats.skipped > 0) {
     logger.warn(
-      { companyId, objectType: model.modelName, skipped: stats.skipped, total: stats.total },
+      { companyId, objectType: model.name, skipped: stats.skipped, total: stats.total },
       "Records had no sourceObjectId and were not mirrored"
     );
   }
@@ -156,32 +227,64 @@ async function upsertDomain(companyId, domain, records, runId) {
   return upsertRecords(model, companyId, records, runId);
 }
 
-async function upsertVouchers(companyId, records, runId) {
-  return upsertRecords(Voucher, companyId, records, runId);
+async function upsertVouchers(companyId, records, runId, options = {}) {
+  return upsertRecords(Voucher, companyId, records, runId, options);
 }
 
 /** Mirror the company list itself, tombstoning companies no longer open. */
 async function upsertCompanies(companies, runId) {
   const now = new Date();
-  const ops = companies.map((c) => ({
-    updateOne: {
-      filter: { companyId: c.companyId },
-      update: {
-        $set: { ...c, companyId: c.companyId, isOpen: true, closedAt: null, lastSeenAt: now, syncedAt: now, lastRunId: runId }
-      },
-      upsert: true
-    }
-  }));
+  const openIds = [];
 
-  const openIds = companies.map((c) => c.companyId);
-  ops.push({
-    updateMany: {
-      filter: { companyId: { $nin: openIds }, isOpen: true },
-      update: { $set: { isOpen: false, closedAt: now, lastRunId: runId } }
-    }
-  });
+  for (const c of companies) {
+    if (!c || !c.companyId) continue;
+    openIds.push(c.companyId);
+    await Company.upsert({
+      ...c,
+      companyId: c.companyId,
+      name: c.name || null,
+      legalName: c.legalName || null,
+      formalName: c.formalName || null,
+      guid: c.guid || null,
+      masterId: c.masterId || null,
+      alterId: c.alterId || null,
+      startingFrom: c.startingFrom || null,
+      startingAt: c.startingAt || null,
+      booksFrom: c.booksFrom || null,
+      financialYearBeginning: c.financialYearBeginning || null,
+      baseCurrency: c.baseCurrency || "INR",
+      country: c.country || "India",
+      countryName: c.countryName || "India",
+      state: c.state || null,
+      stateName: c.stateName || null,
+      pinCode: c.pinCode || null,
+      address: c.address || null,
+      gstin: c.gstin || null,
+      gstRegNo: c.gstRegNo || null,
+      pan: c.pan || null,
+      panCardNo: c.panCardNo || null,
+      cin: c.cin || null,
+      cinNo: c.cinNo || null,
+      email: c.email || null,
+      phone: c.phone || null,
+      phoneNumber: c.phoneNumber || null,
+      mobile: c.mobile || null,
+      mobileNo: c.mobileNo || null,
+      features: c.features || undefined,
+      isOpen: true,
+      closedAt: null,
+      lastSeenAt: now,
+      syncedAt: now,
+      lastRunId: runId
+    });
+  }
 
-  if (ops.length > 0) await Company.bulkWrite(ops, { ordered: false });
+  if (openIds.length > 0) {
+    await Company.update(
+      { isOpen: false, closedAt: now, lastRunId: runId },
+      { where: { companyId: { [Op.notIn]: openIds }, isOpen: true } }
+    );
+  }
   return { total: companies.length };
 }
 
@@ -195,12 +298,15 @@ async function readDomain(companyId, domain) {
   if (!model) return null;
 
   try {
-    const docs = await model.find({ companyId, isDeleted: false }).lean();
+    const docs = await model.findAll({
+      where: { companyId, isDeleted: false },
+      raw: true
+    });
     // An empty mirror is not an answer - it means "not synced yet".
     if (docs.length === 0) return null;
 
     const syncedAt = docs.reduce(
-      (max, d) => (d.syncedAt && d.syncedAt > max ? d.syncedAt : max),
+      (max, d) => (d.syncedAt && new Date(d.syncedAt) > max ? new Date(d.syncedAt) : max),
       new Date(0)
     );
 
@@ -222,17 +328,18 @@ async function readDomain(companyId, domain) {
 async function readVouchers(companyId, { fromDate = null, toDate = null } = {}) {
   if (!isConnected()) return null;
   try {
-    const query = { companyId, isDeleted: false };
-    // The canonical field is `voucherDate` (ISO yyyy-mm-dd), not `date` — a
-    // window built on `date` matched nothing, so every dated read fell through
-    // to live Tally. Compare on the same ISO form the request is converted to
-    // so a partial window is never served as complete.
-    if (fromDate) query.voucherDate = { ...(query.voucherDate || {}), $gte: toIsoDay(fromDate) };
-    if (toDate) query.voucherDate = { ...(query.voucherDate || {}), $lte: toIsoDay(toDate) };
+    const where = { companyId, isDeleted: false };
+    if (fromDate && toDate) {
+      where.voucherDate = { [Op.gte]: toIsoDay(fromDate), [Op.lte]: toIsoDay(toDate) };
+    } else if (fromDate) {
+      where.voucherDate = { [Op.gte]: toIsoDay(fromDate) };
+    } else if (toDate) {
+      where.voucherDate = { [Op.lte]: toIsoDay(toDate) };
+    }
 
-    const docs = await Voucher.find(query).lean();
+    const docs = await Voucher.findAll({ where, raw: true });
     if (docs.length === 0) {
-      const totalCompanyVouchers = await Voucher.countDocuments({ companyId, isDeleted: false });
+      const totalCompanyVouchers = await Voucher.count({ where: { companyId, isDeleted: false } });
       if (totalCompanyVouchers > 0) {
         return {
           available: true,
@@ -246,7 +353,7 @@ async function readVouchers(companyId, { fromDate = null, toDate = null } = {}) 
     }
 
     const syncedAt = docs.reduce(
-      (max, d) => (d.syncedAt && d.syncedAt > max ? d.syncedAt : max),
+      (max, d) => (d.syncedAt && new Date(d.syncedAt) > max ? new Date(d.syncedAt) : max),
       new Date(0)
     );
 
@@ -277,7 +384,7 @@ function toIsoDay(value) {
 async function readCompany(companyId) {
   if (!isConnected()) return null;
   try {
-    const doc = await Company.findOne({ companyId }).lean();
+    const doc = await Company.findOne({ where: { companyId }, raw: true });
     if (!doc) return null;
     return stripCompanyEnvelope(doc);
   } catch (error) {
@@ -286,20 +393,41 @@ async function readCompany(companyId) {
   }
 }
 
+/**
+ * Identify a company the mirror holds AND that Tally last reported open.
+ *
+ * Separate from readCompany on purpose. readCompany answers "have we ever seen
+ * this company", which is the right question when Tally is unreachable. This
+ * one answers "is it safe to serve this company's pages right now", which is
+ * what the request path needs: a company closed in Tally must still read as
+ * closed, not quietly fall back to whatever was mirrored before it was shut.
+ */
+async function readOpenCompany(companyId) {
+  if (!isConnected()) return null;
+  try {
+    const doc = await Company.findOne({ where: { companyId, isOpen: true }, raw: true });
+    if (!doc) return null;
+    return stripCompanyEnvelope(doc);
+  } catch (error) {
+    logger.warn({ error: error.message, companyId }, "Mirror open-company lookup failed");
+    return null;
+  }
+}
+
 async function countsForCompany(companyId) {
   if (!isConnected()) return null;
   const counts = {};
   for (const [domain, model] of Object.entries(DOMAIN_MODELS)) {
-    counts[domain] = await model.countDocuments({ companyId, isDeleted: false });
+    counts[domain] = await model.count({ where: { companyId, isDeleted: false } });
   }
-  counts.vouchers = await Voucher.countDocuments({ companyId, isDeleted: false });
+  counts.vouchers = await Voucher.count({ where: { companyId, isDeleted: false } });
   return counts;
 }
 
 async function listCompanies() {
   if (!isConnected()) return [];
   try {
-    const docs = await Company.find({ isDeleted: false }).lean();
+    const docs = await Company.findAll({ where: { isOpen: true }, raw: true });
     return docs.map(stripCompanyEnvelope);
   } catch (error) {
     logger.warn({ error: error.message }, "Mirror listCompanies lookup failed");
@@ -316,6 +444,7 @@ module.exports = {
   upsertVouchers,
   upsertCompanies,
   readCompany,
+  readOpenCompany,
   listCompanies,
   readDomain,
   readVouchers,

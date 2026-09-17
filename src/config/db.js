@@ -1,24 +1,82 @@
-const dns = require("dns");
-const mongoose = require("mongoose");
+const path = require("path");
+const fs = require("fs");
+const { Sequelize } = require("sequelize");
 const env = require("./env");
 const { logger } = require("../utils/logger");
 
 /**
- * Local MongoDB mirror connection.
+ * Local SQL database mirror connection.
  *
  * TallyPrime stays the source of truth. The mirror is an accelerator and an
- * offline cache, never a dependency: if MongoDB is missing, stopped or
+ * offline cache, never a dependency: if the database is missing, stopped or
  * misconfigured, the bridge must keep answering exactly as it does today by
- * falling back to live extraction. So every failure here is logged and
- * swallowed rather than thrown at the caller or allowed to kill the process.
+ * falling back to live extraction. Every failure here is logged and
+ * swallowed rather than allowed to kill the process.
  */
 
+let connected = false;
 let connecting = null;
 let lastError = null;
 
-/** 1 = connected. Anything else means callers must use the live Tally path. */
+function redactUri(uri) {
+  return String(uri || "").replace(/\/\/[^@]*@/, "//***:***@");
+}
+
+function initSequelize() {
+  const dbUrl = env.db.url || "sqlite:./data/cfo_yantra.sqlite";
+  let dialect = env.db.dialect;
+
+  if (!dialect) {
+    if (dbUrl.startsWith("postgres://") || dbUrl.startsWith("postgresql://")) {
+      dialect = "postgres";
+    } else if (dbUrl.startsWith("mysql://")) {
+      dialect = "mysql";
+    } else {
+      dialect = "sqlite";
+    }
+  }
+
+  const logging = env.db.logging ? (msg) => logger.debug({ msg }, "SQL") : false;
+
+  if (dialect === "sqlite") {
+    let storage = dbUrl.replace(/^sqlite:/, "").trim();
+    if (!storage) storage = "./data/cfo_yantra.sqlite";
+    if (storage !== ":memory:") {
+      storage = path.resolve(process.cwd(), storage);
+      const dir = path.dirname(storage);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    }
+    return new Sequelize({
+      dialect: "sqlite",
+      storage,
+      logging
+    });
+  }
+
+  return new Sequelize(dbUrl, {
+    dialect,
+    logging,
+    pool: {
+      max: 10,
+      min: 0,
+      acquire: env.db.connectTimeoutMs || 10000,
+      idle: 10000
+    },
+    dialectOptions:
+      dialect === "postgres"
+        ? {
+            connectTimeout: env.db.connectTimeoutMs || 10000
+          }
+        : undefined
+  });
+}
+
+const sequelize = initSequelize();
+
 function isConnected() {
-  return mongoose.connection.readyState === 1;
+  return connected;
 }
 
 function getLastError() {
@@ -26,36 +84,31 @@ function getLastError() {
 }
 
 async function connectDatabase() {
-  if (!env.mongo.enabled) {
-    logger.info("Local mirror disabled (MONGODB_ENABLED=false) - serving from TallyPrime only");
+  if (!env.db.enabled) {
+    logger.info("Local SQL mirror disabled (DB_ENABLED=false) - serving from TallyPrime only");
     return false;
   }
-  if (isConnected()) return true;
+  if (connected) return true;
   if (connecting) return connecting;
 
   connecting = (async () => {
     try {
-      if (env.mongo.uri && env.mongo.uri.startsWith("mongodb+srv://")) {
-        try {
-          dns.setServers(["8.8.8.8", "1.1.1.1"]);
-        } catch (dnsErr) {
-          // ignore
-        }
-      }
-      await mongoose.connect(env.mongo.uri, {
-        // Fail fast instead of buffering commands forever when mongod is down,
-        // otherwise a missing database would stall API requests.
-        serverSelectionTimeoutMS: env.mongo.serverSelectionTimeoutMs,
-        bufferCommands: false
-      });
+      await sequelize.authenticate();
+      // Synchronize database schema (creates tables if not exist)
+      await sequelize.sync();
+      connected = true;
       lastError = null;
-      logger.info({ db: mongoose.connection.name }, "Local MongoDB mirror connected");
+      logger.info(
+        { dialect: sequelize.getDialect(), database: sequelize.config.database || sequelize.config.storage },
+        "Local SQL mirror connected"
+      );
       return true;
     } catch (error) {
+      connected = false;
       lastError = error.message;
       logger.warn(
-        { error: error.message, uri: redactUri(env.mongo.uri) },
-        "Local MongoDB mirror unavailable - falling back to live TallyPrime reads"
+        { error: error.message, url: redactUri(env.db.url) },
+        "Local SQL mirror unavailable - falling back to live TallyPrime reads"
       );
       return false;
     } finally {
@@ -67,33 +120,20 @@ async function connectDatabase() {
 }
 
 async function disconnectDatabase() {
-  if (mongoose.connection.readyState === 0) return;
   try {
-    await mongoose.disconnect();
+    await sequelize.close();
+    connected = false;
   } catch (error) {
     logger.warn({ error: error.message }, "Error while disconnecting local mirror");
   }
 }
 
-/** Never log credentials that may be embedded in a connection string. */
-function redactUri(uri) {
-  return String(uri || "").replace(/\/\/[^@]*@/, "//***:***@");
-}
-
-// A dropped connection must not crash the bridge; it just returns reads to Tally.
-mongoose.connection.on("error", (error) => {
-  lastError = error.message;
-  logger.warn({ error: error.message }, "Local mirror connection error");
-});
-mongoose.connection.on("disconnected", () => {
-  logger.warn("Local mirror disconnected - reads fall back to TallyPrime");
-});
-
 module.exports = {
+  sequelize,
+  Sequelize,
   connectDatabase,
   disconnectDatabase,
   isConnected,
   getLastError,
-  redactUri,
-  mongoose
+  redactUri
 };

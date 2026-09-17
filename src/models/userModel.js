@@ -1,45 +1,59 @@
-const mongoose = require("mongoose");
+const { DataTypes } = require("sequelize");
+const { sequelize } = require("../config/db");
 
-const userSchema = new mongoose.Schema(
+const User = sequelize.define(
+  "User",
   {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true
+    },
     mobile: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      index: true
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true
     },
     fullName: {
-      type: String,
-      trim: true,
-      default: ""
+      type: DataTypes.STRING,
+      defaultValue: ""
     },
     email: {
-      type: String,
-      trim: true,
-      lowercase: true,
-      default: null
+      type: DataTypes.STRING,
+      allowNull: true
     },
     role: {
-      type: String,
-      enum: ["admin", "cfo", "viewer"],
-      default: "admin"
+      type: DataTypes.STRING,
+      defaultValue: "admin"
     },
     isVerified: {
-      type: Boolean,
-      default: true
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
     },
     lastLoginAt: {
-      type: Date,
-      default: Date.now
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
     }
   },
   {
-    timestamps: true
+    tableName: "users",
+    timestamps: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ["mobile"]
+      }
+    ]
   }
 );
 
-// Prevent mongoose OverwriteModelError in watch / dev mode
-const User = mongoose.models.User || mongoose.model("User", userSchema);
+// Compatibility getter so user._id continues to work
+Object.defineProperty(User.prototype, "_id", {
+  get() {
+    return this.id;
+  }
+});
 
-module.exports = User;
+const { attachCompat } = require("./sqlModelCompat");
+
+module.exports = attachCompat(User);

@@ -12,10 +12,12 @@ const CostCentre = require("./costCentreModel");
 const CostCategory = require("./costCategoryModel");
 const VoucherType = require("./voucherTypeModel");
 const Currency = require("./currencyModel");
-const { buildMirrorSchema, buildMirrorModel } = require("./mirrorModel.factory");
+const { buildMirrorModel } = require("./mirrorModel.factory");
+const User = require("./userModel");
+const SystemSettings = require("./systemSettingsModel");
 
 /**
- * Mirror collections, one per canonical domain.
+ * Mirror tables, one per canonical domain.
  *
  * The keys match the DOMAINS map in companyData.service exactly, so the sync
  * engine and the DB-first read path can both address a domain by the same name
@@ -36,8 +38,6 @@ const DOMAIN_MODELS = {
 };
 
 const DOMAIN_NAMES = Object.keys(DOMAIN_MODELS);
-const User = require("./userModel");
-const SystemSettings = require("./systemSettingsModel");
 
 module.exports = {
   User,
@@ -58,6 +58,5 @@ module.exports = {
   Currency,
   DOMAIN_MODELS,
   DOMAIN_NAMES,
-  buildMirrorSchema,
   buildMirrorModel
 };

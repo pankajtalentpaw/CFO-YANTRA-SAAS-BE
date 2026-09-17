@@ -187,11 +187,12 @@ async function getVouchers(company, { fromDate, toDate, includeEntries = false, 
   // be served where entries were requested, nor shared across companies.
   const key = `${company.companyId}::vouchers::${effectiveFrom || "*"}::${toDate || "*"}::${includeEntries ? "full" : "light"}`;
 
-  // 1. DB-First Fast Path: Read from MongoDB local mirror (<15ms)
+  // 1. DB-First Fast Path: Read from SQL local mirror (<15ms)
   if (!bypassMirror) {
     const mirrored = await mirror.readVouchers(company.companyId, { fromDate: effectiveFrom, toDate });
     if (mirrored) return mirrored;
   }
+
   const res = await cached(key, async () => {
     const fullResult = await extract(company, {
       builder: (name) => buildVouchersRequest(name, effectiveFrom || null, toDate || null, {
