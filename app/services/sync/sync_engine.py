@@ -17,6 +17,7 @@ from sqlalchemy import select, func, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
+from app.core.company_db import company_db_manager
 from app.core.socket import emit_sync_status
 from app.models import (
     Company, SyncState, Voucher, Ledger, Group,
@@ -195,34 +196,40 @@ class TallySyncEngine:
             "progressPercent": 5
         })
 
-        async with AsyncSessionLocal() as db:
+        company_folder_service.save_sync_state(company_id, sync_meta)
+
+        comp_db = await company_db_manager.get_session_direct(company_id, company_name)
+        async with AsyncSessionLocal() as central_db:
             sync_state = None
             try:
-                # Update / create SyncState
-                sync_state_res = await db.execute(select(SyncState).where(SyncState.companyId == company_id))
-                sync_state = sync_state_res.scalar_one_or_none()
-                if not sync_state:
-                    sync_state = SyncState(
-                        companyId=company_id,
-                        companyName=company_name or company_id,
-                        status="IN_PROGRESS",
-                        lastRunId=run_id,
-                        lastStartedAt=datetime.utcnow()
-                    )
-                    db.add(sync_state)
-                else:
-                    sync_state.status = "IN_PROGRESS"
-                    sync_state.lastRunId = run_id
-                    sync_state.lastStartedAt = datetime.utcnow()
-                    sync_state.runCount += 1
-                await db.commit()
+                # Update / create SyncState in both company and central databases
+                for d in (comp_db, central_db):
+                    res = await d.execute(select(SyncState).where(SyncState.companyId == company_id))
+                    st = res.scalar_one_or_none()
+                    if not st:
+                        st = SyncState(
+                            companyId=company_id,
+                            companyName=company_name or company_id,
+                            status="IN_PROGRESS",
+                            lastRunId=run_id,
+                            lastStartedAt=datetime.utcnow()
+                        )
+                        d.add(st)
+                    else:
+                        st.status = "IN_PROGRESS"
+                        st.lastRunId = run_id
+                        st.lastStartedAt = datetime.utcnow()
+                        st.runCount += 1
+                    await d.commit()
+                    if d is comp_db:
+                        sync_state = st
 
-                # Smart Incremental vs Full Sync detection using alterId
-                domains = dict(sync_state.domains or {})
+                # Smart Incremental vs Full Sync detection using alterId from company database
+                domains = dict(sync_state.domains or {}) if sync_state else {}
                 stored_alter_id = domains.get("maxAlterId", 0)
                 if not stored_alter_id:
                     try:
-                        row = (await db.execute(
+                        row = (await comp_db.execute(
                             text("SELECT MAX(CAST(json_extract(data, '$.alterId') AS INTEGER)) FROM vouchers WHERE companyId = :cid"),
                             {"cid": company_id}
                         )).scalar()
@@ -244,6 +251,7 @@ class TallySyncEngine:
 
                     sync_meta["currentStage"] = report_code
                     sync_meta["stages"][report_code] = "RUNNING"
+                    company_folder_service.save_sync_state(company_id, sync_meta)
 
                     await self._broadcast_progress({
                         "isSyncing": True,
@@ -255,9 +263,10 @@ class TallySyncEngine:
                         "progressPercent": max(5, int((idx / total_stages) * 100))
                     })
 
-                    # Execute report extraction
+                    # Execute report extraction into company db and central db
                     records_count = await self._execute_report_stage(
-                        db=db,
+                        comp_db=comp_db,
+                        central_db=central_db,
                         company_id=company_id,
                         company_name=company_name or company_id,
                         report_code=report_code,
@@ -275,11 +284,12 @@ class TallySyncEngine:
                     sync_meta["stages"][report_code] = "COMPLETED"
                     sync_meta["totalRecordsSynced"] = total_synced
                     sync_meta["completedChunks"] = idx + 1
+                    company_folder_service.save_sync_state(company_id, sync_meta)
 
                     await self._broadcast_progress({
                         "isSyncing": True,
                         "stage": stage_badge,
-                        "message": f"Synced {stage_title} ({records_count} records saved to SQLite)",
+                        "message": f"Synced {stage_title} ({records_count} records saved to company database)",
                         "recordsProcessed": total_synced,
                         "currentBatch": idx + 1,
                         "totalBatches": total_stages,
@@ -304,20 +314,26 @@ class TallySyncEngine:
                 sync_meta["currentStage"] = "FINISHED"
                 sync_meta["durationMs"] = duration_ms
                 sync_meta["finishedAt"] = datetime.now(timezone.utc).isoformat()
+                company_folder_service.save_sync_state(company_id, sync_meta)
 
-                sync_state.status = "IDLE"
-                sync_state.lastFinishedAt = datetime.utcnow()
-                sync_state.lastSuccessAt = datetime.utcnow()
-                sync_state.lastDurationMs = duration_ms
-                sync_state.totalRecords = total_synced
-                sync_state.changedRecords = total_synced
-                await db.commit()
+                # Update SyncState in both databases
+                for d in (comp_db, central_db):
+                    res = await d.execute(select(SyncState).where(SyncState.companyId == company_id))
+                    st = res.scalar_one_or_none()
+                    if st:
+                        st.status = "IDLE"
+                        st.lastFinishedAt = datetime.utcnow()
+                        st.lastSuccessAt = datetime.utcnow()
+                        st.lastDurationMs = duration_ms
+                        st.totalRecords = total_synced
+                        st.changedRecords = total_synced
+                        await d.commit()
 
                 # Broadcast final success
                 await self._broadcast_progress({
                     "isSyncing": False,
                     "stage": "COMPLETED",
-                    "message": f"Sync complete: {total_synced} records saved to database in {duration_ms // 1000}s.",
+                    "message": f"Sync complete: {total_synced} records saved to company database in {duration_ms // 1000}s.",
                     "recordsProcessed": total_synced,
                     "currentBatch": total_stages,
                     "totalBatches": total_stages,
@@ -342,6 +358,9 @@ class TallySyncEngine:
                 sync_meta["error"] = str(e)
                 sync_meta["finishedAt"] = datetime.now(timezone.utc).isoformat()
 
+                company_folder_service.save_sync_state(company_id, sync_meta)
+                company_folder_service.log_sync_error(company_id, str(e), sync_meta.get("currentStage", "FAILED"), run_id)
+
                 await self._broadcast_progress({
                     "isSyncing": False,
                     "stage": "FAILED",
@@ -350,11 +369,17 @@ class TallySyncEngine:
                     "progressPercent": 0
                 })
 
-                if sync_state:
-                    sync_state.status = "ERROR"
-                    sync_state.lastError = {"message": str(e), "runId": run_id}
-                    sync_state.lastFinishedAt = datetime.utcnow()
-                    await db.commit()
+                for d in (comp_db, central_db):
+                    try:
+                        res = await d.execute(select(SyncState).where(SyncState.companyId == company_id))
+                        st = res.scalar_one_or_none()
+                        if st:
+                            st.status = "ERROR"
+                            st.lastError = {"message": str(e), "runId": run_id}
+                            st.lastFinishedAt = datetime.utcnow()
+                            await d.commit()
+                    except Exception:
+                        pass
 
                 return {
                     "success": False,
@@ -362,46 +387,62 @@ class TallySyncEngine:
                     "data": sync_meta
                 }
             finally:
+                if comp_db:
+                    await comp_db.close()
                 if company_id in self._active_syncs:
                     del self._active_syncs[company_id]
 
-    async def _upsert_vouchers_batch(self, db: AsyncSession, company_id: str, run_id: str, vouchers: List[dict]):
-        """Fast bulk upserts for a parsed batch of vouchers in SQLite."""
+    async def _upsert_vouchers_batch(
+        self,
+        comp_db: AsyncSession,
+        central_db: Optional[AsyncSession],
+        company_id: str,
+        run_id: str,
+        vouchers: List[dict]
+    ):
+        """Fast bulk upserts for a parsed batch of vouchers in both company database and central mirror."""
         if not vouchers:
             return
 
-        guids = [v.get("guid") or v.get("voucherNumber") for v in vouchers if (v.get("guid") or v.get("voucherNumber"))]
-        existing_res = await db.execute(
-            select(Voucher).where(Voucher.companyId == company_id, Voucher.sourceObjectId.in_(guids))
-        )
-        existing_map = {v.sourceObjectId: v for v in existing_res.scalars().all()}
+        for db in ([comp_db, central_db] if central_db else [comp_db]):
+            try:
+                guids = [v.get("guid") or v.get("voucherNumber") for v in vouchers if (v.get("guid") or v.get("voucherNumber"))]
+                existing_res = await db.execute(
+                    select(Voucher).where(Voucher.companyId == company_id, Voucher.sourceObjectId.in_(guids))
+                )
+                existing_map = {v.sourceObjectId: v for v in existing_res.scalars().all()}
 
-        for v in vouchers:
-            guid = v.get("guid") or v.get("voucherNumber")
-            if not guid:
-                continue
-            if guid not in existing_map:
-                db.add(Voucher(
-                    companyId=company_id,
-                    sourceObjectId=guid,
-                    voucherDate=v.get("voucherDate"),
-                    sourceVoucherNumber=v.get("voucherNumber"),
-                    name=v.get("voucherType"),
-                    parent=v.get("partyLedgerName"),
-                    lastRunId=run_id,
-                    header=v,
-                    data=v
-                ))
-            else:
-                existing = existing_map[guid]
-                existing.voucherDate = v.get("voucherDate", existing.voucherDate)
-                existing.lastRunId = run_id
-                existing.data = v
-        await db.commit()
+                for v in vouchers:
+                    guid = v.get("guid") or v.get("voucherNumber")
+                    if not guid:
+                        continue
+                    if guid not in existing_map:
+                        db.add(Voucher(
+                            companyId=company_id,
+                            sourceObjectId=guid,
+                            voucherDate=v.get("voucherDate"),
+                            sourceVoucherNumber=v.get("voucherNumber"),
+                            name=v.get("voucherType"),
+                            parent=v.get("partyLedgerName"),
+                            lastRunId=run_id,
+                            header=v,
+                            data=v
+                        ))
+                    else:
+                        existing = existing_map[guid]
+                        existing.voucherDate = v.get("voucherDate", existing.voucherDate)
+                        existing.lastRunId = run_id
+                        existing.data = v
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                if db is comp_db:
+                    raise
 
     async def _execute_report_stage(
         self,
-        db: AsyncSession,
+        comp_db: AsyncSession,
+        central_db: Optional[AsyncSession],
         company_id: str,
         company_name: str,
         report_code: str,
@@ -414,7 +455,8 @@ class TallySyncEngine:
         domains: Optional[Dict[str, Any]] = None,
         total_synced: int = 0
     ) -> int:
-        """Executes individual report extraction stage with high-performance bulk upserts."""
+        """Executes individual report extraction stage with bulk upserts into company & central databases."""
+        dbs = [comp_db, central_db] if central_db else [comp_db]
 
         if report_code in ("CM", "LEDGER"):
             # Masters: All Ledgers / Customer Ledgers via safe native collection
@@ -431,36 +473,39 @@ class TallySyncEngine:
 
             ledgers = parse_tally_masters_xml(raw_xml, item_tag="LEDGER")
             if ledgers:
-                # Fast bulk pre-fetch
-                existing_res = await db.execute(
-                    select(Ledger).where(Ledger.companyId == company_id)
-                )
-                existing_map = {l.name: l for l in existing_res.scalars().all()}
+                for db in dbs:
+                    try:
+                        existing_res = await db.execute(select(Ledger).where(Ledger.companyId == company_id))
+                        existing_map = {l.name: l for l in existing_res.scalars().all()}
 
-                for idx, l in enumerate(ledgers):
-                    ledger_name = l.get("name")
-                    if not ledger_name:
-                        continue
-                    if ledger_name not in existing_map:
-                        new_l = Ledger(
-                            companyId=company_id,
-                            sourceObjectId=l.get("guid") or ledger_name,
-                            name=ledger_name,
-                            parent=l.get("parent", ""),
-                            lastRunId=run_id,
-                            data=l
-                        )
-                        db.add(new_l)
-                        existing_map[ledger_name] = new_l
-                    else:
-                        existing = existing_map[ledger_name]
-                        existing.parent = l.get("parent", existing.parent)
-                        existing.lastRunId = run_id
-                        existing.data = l
+                        for idx, l in enumerate(ledgers):
+                            ledger_name = l.get("name")
+                            if not ledger_name:
+                                continue
+                            if ledger_name not in existing_map:
+                                new_l = Ledger(
+                                    companyId=company_id,
+                                    sourceObjectId=l.get("guid") or ledger_name,
+                                    name=ledger_name,
+                                    parent=l.get("parent", ""),
+                                    lastRunId=run_id,
+                                    data=l
+                                )
+                                db.add(new_l)
+                                existing_map[ledger_name] = new_l
+                            else:
+                                existing = existing_map[ledger_name]
+                                existing.parent = l.get("parent", existing.parent)
+                                existing.lastRunId = run_id
+                                existing.data = l
 
-                    if (idx + 1) % 500 == 0:
+                            if (idx + 1) % 500 == 0:
+                                await db.commit()
                         await db.commit()
-                await db.commit()
+                    except Exception:
+                        await db.rollback()
+                        if db is comp_db:
+                            raise
             return len(ledgers)
 
         elif report_code == "CMGRP":
@@ -477,30 +522,36 @@ class TallySyncEngine:
             )
             groups = parse_tally_masters_xml(raw_xml, item_tag="GROUP")
             if groups:
-                existing_res = await db.execute(select(Group).where(Group.companyId == company_id))
-                existing_map = {g.name: g for g in existing_res.scalars().all()}
+                for db in dbs:
+                    try:
+                        existing_res = await db.execute(select(Group).where(Group.companyId == company_id))
+                        existing_map = {g.name: g for g in existing_res.scalars().all()}
 
-                for g in groups:
-                    g_name = g.get("name")
-                    if not g_name:
-                        continue
-                    if g_name not in existing_map:
-                        new_g = Group(
-                            companyId=company_id,
-                            sourceObjectId=g.get("guid") or g_name,
-                            name=g_name,
-                            parent=g.get("parent", ""),
-                            lastRunId=run_id,
-                            data=g
-                        )
-                        db.add(new_g)
-                        existing_map[g_name] = new_g
-                    else:
-                        existing = existing_map[g_name]
-                        existing.parent = g.get("parent", existing.parent)
-                        existing.lastRunId = run_id
-                        existing.data = g
-                await db.commit()
+                        for g in groups:
+                            g_name = g.get("name")
+                            if not g_name:
+                                continue
+                            if g_name not in existing_map:
+                                new_g = Group(
+                                    companyId=company_id,
+                                    sourceObjectId=g.get("guid") or g_name,
+                                    name=g_name,
+                                    parent=g.get("parent", ""),
+                                    lastRunId=run_id,
+                                    data=g
+                                )
+                                db.add(new_g)
+                                existing_map[g_name] = new_g
+                            else:
+                                existing = existing_map[g_name]
+                                existing.parent = g.get("parent", existing.parent)
+                                existing.lastRunId = run_id
+                                existing.data = g
+                        await db.commit()
+                    except Exception:
+                        await db.rollback()
+                        if db is comp_db:
+                            raise
             return len(groups)
 
         elif report_code == "IM":
@@ -517,33 +568,39 @@ class TallySyncEngine:
             )
             items = parse_tally_masters_xml(raw_xml, item_tag="STOCKITEM")
             if items:
-                existing_res = await db.execute(select(StockItem).where(StockItem.companyId == company_id))
-                existing_map = {item.name: item for item in existing_res.scalars().all()}
+                for db in dbs:
+                    try:
+                        existing_res = await db.execute(select(StockItem).where(StockItem.companyId == company_id))
+                        existing_map = {item.name: item for item in existing_res.scalars().all()}
 
-                for idx, i in enumerate(items):
-                    name = i.get("name")
-                    if not name:
-                        continue
-                    if name not in existing_map:
-                        new_i = StockItem(
-                            companyId=company_id,
-                            sourceObjectId=i.get("guid") or name,
-                            name=name,
-                            parent=i.get("parent", ""),
-                            lastRunId=run_id,
-                            data=i
-                        )
-                        db.add(new_i)
-                        existing_map[name] = new_i
-                    else:
-                        existing = existing_map[name]
-                        existing.parent = i.get("parent", existing.parent)
-                        existing.lastRunId = run_id
-                        existing.data = i
+                        for idx, i in enumerate(items):
+                            name = i.get("name")
+                            if not name:
+                                continue
+                            if name not in existing_map:
+                                new_i = StockItem(
+                                    companyId=company_id,
+                                    sourceObjectId=i.get("guid") or name,
+                                    name=name,
+                                    parent=i.get("parent", ""),
+                                    lastRunId=run_id,
+                                    data=i
+                                )
+                                db.add(new_i)
+                                existing_map[name] = new_i
+                            else:
+                                existing = existing_map[name]
+                                existing.parent = i.get("parent", existing.parent)
+                                existing.lastRunId = run_id
+                                existing.data = i
 
-                    if (idx + 1) % 500 == 0:
+                            if (idx + 1) % 500 == 0:
+                                await db.commit()
                         await db.commit()
-                await db.commit()
+                    except Exception:
+                        await db.rollback()
+                        if db is comp_db:
+                            raise
             return len(items)
 
         elif report_code == "IMGRP":
@@ -560,30 +617,36 @@ class TallySyncEngine:
             )
             s_groups = parse_tally_masters_xml(raw_xml, item_tag="STOCKGROUP")
             if s_groups:
-                existing_res = await db.execute(select(StockGroup).where(StockGroup.companyId == company_id))
-                existing_map = {sg.name: sg for sg in existing_res.scalars().all()}
+                for db in dbs:
+                    try:
+                        existing_res = await db.execute(select(StockGroup).where(StockGroup.companyId == company_id))
+                        existing_map = {sg.name: sg for sg in existing_res.scalars().all()}
 
-                for sg in s_groups:
-                    name = sg.get("name")
-                    if not name:
-                        continue
-                    if name not in existing_map:
-                        new_sg = StockGroup(
-                            companyId=company_id,
-                            sourceObjectId=sg.get("guid") or name,
-                            name=name,
-                            parent=sg.get("parent", ""),
-                            lastRunId=run_id,
-                            data=sg
-                        )
-                        db.add(new_sg)
-                        existing_map[name] = new_sg
-                    else:
-                        existing = existing_map[name]
-                        existing.parent = sg.get("parent", existing.parent)
-                        existing.lastRunId = run_id
-                        existing.data = sg
-                await db.commit()
+                        for sg in s_groups:
+                            name = sg.get("name")
+                            if not name:
+                                continue
+                            if name not in existing_map:
+                                new_sg = StockGroup(
+                                    companyId=company_id,
+                                    sourceObjectId=sg.get("guid") or name,
+                                    name=name,
+                                    parent=sg.get("parent", ""),
+                                    lastRunId=run_id,
+                                    data=sg
+                                )
+                                db.add(new_sg)
+                                existing_map[name] = new_sg
+                            else:
+                                existing = existing_map[name]
+                                existing.parent = sg.get("parent", existing.parent)
+                                existing.lastRunId = run_id
+                                existing.data = sg
+                        await db.commit()
+                    except Exception:
+                        await db.rollback()
+                        if db is comp_db:
+                            raise
             return len(s_groups)
 
         elif report_code in ("SPCD", "BPBR"):
@@ -604,7 +667,7 @@ class TallySyncEngine:
                 raw_xml = await self._safe_tally_request(xml_req)
                 vouchers = parse_tally_vouchers_xml(raw_xml)
                 if vouchers:
-                    await self._upsert_vouchers_batch(db, company_id, run_id, vouchers)
+                    await self._upsert_vouchers_batch(comp_db, central_db, company_id, run_id, vouchers)
                     total_stage_vouchers += len(vouchers)
                     for v in vouchers:
                         v_aid = v.get("alterId") or 0
@@ -634,7 +697,7 @@ class TallySyncEngine:
                     raw_xml = await self._safe_tally_request(xml_req)
                     vouchers = parse_tally_vouchers_xml(raw_xml)
                     if vouchers:
-                        await self._upsert_vouchers_batch(db, company_id, run_id, vouchers)
+                        await self._upsert_vouchers_batch(comp_db, central_db, company_id, run_id, vouchers)
                         total_stage_vouchers += len(vouchers)
                         for v in vouchers:
                             v_aid = v.get("alterId") or 0
@@ -664,8 +727,15 @@ class TallySyncEngine:
             # Update tracked alterId in SyncState domains
             if sync_state and domains is not None and max_seen_alter_id > domains.get("maxAlterId", 0):
                 domains["maxAlterId"] = max_seen_alter_id
-                sync_state.domains = dict(domains)
-                await db.commit()
+                for db in dbs:
+                    try:
+                        res = await db.execute(select(SyncState).where(SyncState.companyId == company_id))
+                        st = res.scalar_one_or_none()
+                        if st:
+                            st.domains = dict(domains)
+                            await db.commit()
+                    except Exception:
+                        pass
 
             return total_stage_vouchers
 
@@ -684,53 +754,58 @@ class TallySyncEngine:
                 is_xml=True
             )
 
-            await db.execute(
-                delete(BillOutstanding).where(
-                    BillOutstanding.companyId == company_id,
-                    BillOutstanding.partyType == party_type
-                )
-            )
-
             bills_synced = 0
-            try:
-                import defusedxml.ElementTree as ET
-                root = ET.fromstring(raw_xml)
-                for bill_elem in root.iter("BILL"):
-                    party = bill_elem.findtext("BILLPARTY", "Unknown")
-                    bill_no = bill_elem.findtext("BILLREF", "REF")
-                    bill_date = bill_elem.findtext("BILLDATE", "")
-                    due_date = bill_elem.findtext("BILLDUEDATE", "")
-                    amt = float(bill_elem.findtext("BILLCL", "0.0"))
+            for db in dbs:
+                try:
+                    await db.execute(
+                        delete(BillOutstanding).where(
+                            BillOutstanding.companyId == company_id,
+                            BillOutstanding.partyType == party_type
+                        )
+                    )
 
-                    overdue_days = 0
-                    is_overdue = False
-                    if due_date:
-                        try:
-                            d_date = datetime.strptime(due_date.strip(), "%Y%m%d")
-                            diff = (datetime.now() - d_date).days
-                            if diff > 0:
-                                overdue_days = diff
-                                is_overdue = True
-                        except Exception:
-                            pass
+                    import defusedxml.ElementTree as ET
+                    root = ET.fromstring(raw_xml)
+                    current_count = 0
+                    for bill_elem in root.iter("BILL"):
+                        party = bill_elem.findtext("BILLPARTY", "Unknown")
+                        bill_no = bill_elem.findtext("BILLREF", "REF")
+                        bill_date = bill_elem.findtext("BILLDATE", "")
+                        due_date = bill_elem.findtext("BILLDUEDATE", "")
+                        amt = float(bill_elem.findtext("BILLCL", "0.0"))
 
-                    db.add(BillOutstanding(
-                        companyId=company_id,
-                        partyName=party,
-                        partyType=party_type,
-                        billNumber=bill_no,
-                        billDate=bill_date,
-                        dueDate=due_date,
-                        billAmount=amt,
-                        pendingAmount=amt,
-                        overdueDays=overdue_days,
-                        isOverdue=is_overdue
-                    ))
-                    bills_synced += 1
-            except Exception:
-                pass
+                        overdue_days = 0
+                        is_overdue = False
+                        if due_date:
+                            try:
+                                d_date = datetime.strptime(due_date.strip(), "%Y%m%d")
+                                diff = (datetime.now() - d_date).days
+                                if diff > 0:
+                                    overdue_days = diff
+                                    is_overdue = True
+                            except Exception:
+                                pass
 
-            await db.commit()
+                        db.add(BillOutstanding(
+                            companyId=company_id,
+                            partyName=party,
+                            partyType=party_type,
+                            billNumber=bill_no,
+                            billDate=bill_date,
+                            dueDate=due_date,
+                            billAmount=amt,
+                            pendingAmount=amt,
+                            overdueDays=overdue_days,
+                            isOverdue=is_overdue
+                        ))
+                        current_count += 1
+                    await db.commit()
+                    bills_synced = current_count
+                except Exception:
+                    await db.rollback()
+                    if db is comp_db:
+                        raise
+
             return bills_synced
 
         return 0

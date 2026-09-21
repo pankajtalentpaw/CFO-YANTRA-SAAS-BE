@@ -2,13 +2,16 @@
 Companies endpoints.
 Matches src/routes/companiesRoutes.js and src/controllers/companiesController.js.
 Ensures static catalog routes are registered BEFORE parameterized /{companyId} routes.
+All company-scoped endpoints read directly from the dedicated local SQLite database
+(data/companies/{company-folder}/database.sqlite), providing offline-first capabilities.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, AsyncGenerator
 from fastapi import APIRouter, Depends, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
+from app.core.company_db import company_db_manager
 from app.core.exceptions import ApiError, AppErrorCodes
 from app.models import (
     Company, SyncState, Voucher, Ledger, Group,
@@ -20,10 +23,49 @@ from app.services.analytics.cube import AnalyticsCube, verify_cube
 from app.services.analytics.dashboard_service import compute_dashboard_data
 
 from datetime import datetime, timezone
+from pathlib import Path
 from app.services.storage import company_folder_service
 from app.services.tally.tally_client import tally_client
 
 router = APIRouter(prefix="/companies", tags=["Companies"])
+
+
+# --------------------------------------------------------------------------
+# DEPENDENCIES FOR COMPANY-ISOLATED LOCAL STORAGE
+# --------------------------------------------------------------------------
+
+async def get_comp_db(companyId: str) -> AsyncGenerator[AsyncSession, None]:
+    """Dependency providing an AsyncSession connected to the company's dedicated database.sqlite."""
+    async for session in company_db_manager.get_session(companyId):
+        yield session
+
+
+def _enrich_company_storage_metadata(cid: str, company_obj: Optional[Any] = None) -> Dict[str, Any]:
+    """Computes storage telemetry, file sizes, and sync freshness."""
+    meta = company_folder_service.ensure_company_structure(cid)
+    db_path = company_folder_service.get_company_db_path(cid)
+    sync_state = company_folder_service.load_sync_state(cid)
+    has_local = db_path.exists() and db_path.stat().st_size > 0
+    db_size = db_path.stat().st_size if has_local else 0
+
+    last_sync = sync_state.get("lastSyncTime") or sync_state.get("lastSuccessAt")
+    if not last_sync and company_obj and getattr(company_obj, "lastSeenAt", None):
+        last_sync = company_obj.lastSeenAt.isoformat()
+
+    status = sync_state.get("status")
+    if not status:
+        status = "COMPLETED" if has_local else "PENDING"
+
+    return {
+        "tallyFolder": meta.get("folderName"),
+        "tallyCompanyNumber": meta.get("companyNumber"),
+        "isLocalAvailable": has_local,
+        "localDatabaseSize": db_size,
+        "lastSyncTime": last_sync,
+        "isStale": sync_state.get("isStale", False),
+        "syncStatus": status
+    }
+
 
 # --------------------------------------------------------------------------
 # STATIC ROUTES (Registered FIRST to avoid /{companyId} shadowing)
@@ -35,6 +77,90 @@ async def get_analytics_catalog_global():
         "success": True,
         "data": get_catalog_summary()
     }
+
+
+@router.post("/register")
+async def register_company(
+    payload: Dict[str, Any] = Body(...),
+    central_db: AsyncSession = Depends(get_db)
+):
+    """
+    Registers a new company in CFO Yantra:
+    - Derives or assigns stable internal company ID
+    - Sets up dedicated Tally-style directory (data/companies/{comp_num}_{name}/)
+    - Initializes dedicated SQLite database schema
+    - Writes company.json profile and initial sync state
+    - Registers in companies_index.json and central catalog mirror
+    """
+    name = payload.get("name") or payload.get("companyName")
+    if not name or not str(name).strip():
+        raise ApiError.bad_request("Company name is required for registration", AppErrorCodes.VALIDATION_ERROR)
+
+    name = str(name).strip()
+    guid = payload.get("guid") or payload.get("companyGuid")
+    master_id = payload.get("masterId")
+    company_id = payload.get("companyId") or company_folder_service.derive_stable_company_id(guid, master_id, name)
+
+    # Ensure physical folder structure
+    meta = company_folder_service.ensure_company_structure(company_id, name)
+
+    # Initialize company database schema
+    await company_db_manager.get_engine(company_id, name)
+
+    # Save initial profile
+    profile_data = {
+        "companyId": company_id,
+        "name": name,
+        "legalName": payload.get("legalName") or name,
+        "guid": guid,
+        "masterId": master_id,
+        "registeredAt": datetime.now(timezone.utc).isoformat(),
+        **payload
+    }
+    company_folder_service.save_company_profile(company_id, profile_data)
+
+    # Save initial sync state
+    company_folder_service.save_sync_state(company_id, {
+        "companyId": company_id,
+        "companyName": name,
+        "status": "INITIALIZED",
+        "lastSyncTime": None,
+        "isStale": True
+    })
+
+    # Register in central db catalog if not exists
+    res = await central_db.execute(select(Company).where(Company.companyId == company_id))
+    existing = res.scalar_one_or_none()
+    now_utc = datetime.now(timezone.utc)
+    if not existing:
+        new_c = Company(
+            companyId=company_id,
+            name=name,
+            legalName=payload.get("legalName") or name,
+            guid=guid,
+            masterId=master_id,
+            isOpen=True,
+            lastSeenAt=now_utc,
+            createdAt=now_utc,
+            updatedAt=now_utc
+        )
+        central_db.add(new_c)
+        await central_db.commit()
+
+    db_path = company_folder_service.get_company_db_path(company_id)
+    return {
+        "success": True,
+        "message": f"Company '{name}' registered successfully with dedicated local storage",
+        "data": {
+            "companyId": company_id,
+            "companyName": name,
+            "folderName": meta.get("folderName"),
+            "folderPath": meta.get("folderPath"),
+            "databasePath": str(db_path),
+            "isLocalAvailable": db_path.exists()
+        }
+    }
+
 
 # --------------------------------------------------------------------------
 # COMPANY LIST & CRUD
@@ -142,11 +268,11 @@ async def get_companies(
     result = await db.execute(select(Company).order_by(Company.isOpen.desc(), Company.name))
     companies = result.scalars().all()
     output = []
+    existing_cids = set()
     for c in companies:
         unwrapped = unwrap_row(c)
-        meta = company_folder_service.ensure_company_structure(c.companyId, c.name)
-        unwrapped["tallyFolder"] = meta.get("folderName")
-        unwrapped["tallyCompanyNumber"] = meta.get("companyNumber")
+        meta_storage = _enrich_company_storage_metadata(c.companyId, c)
+        unwrapped.update(meta_storage)
         unwrapped["companyName"] = c.name or unwrapped.get("name")
         unwrapped["companyGuid"] = c.guid or unwrapped.get("guid") or c.companyId
         unwrapped["legalName"] = c.legalName or c.name or unwrapped.get("name")
@@ -154,6 +280,25 @@ async def get_companies(
         unwrapped["booksFrom"] = c.booksFrom or unwrapped.get("booksFrom")
         unwrapped["isOpen"] = bool(c.isOpen)
         output.append(unwrapped)
+        existing_cids.add(c.companyId)
+
+    # Merge any registered companies from companies_index.json not already in central db
+    indexed_companies = company_folder_service._load_index()
+    for cid, meta in indexed_companies.items():
+        if cid not in existing_cids:
+            storage_meta = _enrich_company_storage_metadata(cid)
+            entry = {
+                "companyId": cid,
+                "companyName": meta.get("companyName", cid),
+                "name": meta.get("companyName", cid),
+                "legalName": meta.get("companyName", cid),
+                "companyGuid": meta.get("guid") or cid,
+                "masterId": meta.get("masterId") or meta.get("companyNumber"),
+                "isOpen": True,
+                **storage_meta
+            }
+            output.append(entry)
+            existing_cids.add(cid)
 
     return {
         "success": True,
@@ -163,9 +308,21 @@ async def get_companies(
         "stale": is_stale
     }
 
+
 # --------------------------------------------------------------------------
-# COMPANY PARAMETERIZED ROUTES
+# COMPANY PARAMETERIZED ROUTES (LOCAL-FIRST VIA COMPANY DATABASE)
 # --------------------------------------------------------------------------
+
+@router.post("/{companyId}/register")
+async def register_company_by_id(
+    companyId: str,
+    payload: Optional[Dict[str, Any]] = Body(default=None),
+    db: AsyncSession = Depends(get_db)
+):
+    body = payload or {}
+    body["companyId"] = companyId
+    return await register_company(body, db)
+
 
 @router.get("/{companyId}/reports/report5/analytics/catalog")
 async def get_company_analytics_catalog(companyId: str):
@@ -174,6 +331,7 @@ async def get_company_analytics_catalog(companyId: str):
         "companyId": companyId,
         "data": get_catalog_summary()
     }
+
 
 @router.get("/{companyId}/reports/report5/analytics/dashboards")
 async def get_company_analytics_dashboards(companyId: str):
@@ -185,6 +343,7 @@ async def get_company_analytics_dashboards(companyId: str):
             "salesManagerTop10": []
         }
     }
+
 
 @router.get("/{companyId}/reports/report5/analytics/verification")
 async def get_company_analytics_verification(companyId: str):
@@ -199,6 +358,7 @@ async def get_company_analytics_verification(companyId: str):
         }
     }
 
+
 @router.get("/{companyId}/reports/report5/analytics")
 async def get_company_analytics(companyId: str):
     return {
@@ -209,6 +369,7 @@ async def get_company_analytics(companyId: str):
             "catalog": get_catalog_summary()
         }
     }
+
 
 @router.get("/{companyId}/reports/report5")
 @router.get("/{companyId}/mis-report-5")
@@ -223,55 +384,69 @@ async def get_mis_report_5(companyId: str):
         }
     }
 
+
 @router.get("/{companyId}/overview")
-async def get_overview(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_overview(companyId: str, db: AsyncSession = Depends(get_comp_db)):
+    """Local-first company overview reading directly from the company's dedicated database."""
     company_res = await db.execute(select(Company).where(Company.companyId == companyId))
     company = company_res.scalar_one_or_none()
-    if not company:
-        raise ApiError.not_found(f"Company {companyId} not found", AppErrorCodes.COMPANY_NOT_FOUND)
+
+    if company:
+        comp_dict = unwrap_row(company)
+    else:
+        meta = company_folder_service.ensure_company_structure(companyId)
+        comp_dict = {
+            "companyId": companyId,
+            "name": meta.get("companyName", companyId),
+            "isOpen": True
+        }
 
     v_count = await db.scalar(select(func.count(Voucher.id)).where(Voucher.companyId == companyId))
     l_count = await db.scalar(select(func.count(Ledger.id)).where(Ledger.companyId == companyId))
     g_count = await db.scalar(select(func.count(Group.id)).where(Group.companyId == companyId))
     s_count = await db.scalar(select(func.count(StockItem.id)).where(StockItem.companyId == companyId))
 
+    storage_meta = _enrich_company_storage_metadata(companyId, company)
+
     return {
         "success": True,
         "data": {
-            "company": unwrap_row(company),
+            "company": comp_dict,
             "counts": {
                 "vouchers": v_count or 0,
                 "ledgers": l_count or 0,
                 "groups": g_count or 0,
                 "stockItems": s_count or 0
-            }
-        }
+            },
+            "storage": storage_meta
+        },
+        **storage_meta
     }
 
-@router.get("/{companyId}/readiness")
-async def get_readiness(companyId: str, db: AsyncSession = Depends(get_db)):
-    company_res = await db.execute(select(Company).where(Company.companyId == companyId))
-    company = company_res.scalar_one_or_none()
-    if not company:
-        raise ApiError.not_found(f"Company {companyId} not found", AppErrorCodes.COMPANY_NOT_FOUND)
 
+@router.get("/{companyId}/readiness")
+async def get_readiness(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     v_count = await db.scalar(select(func.count(Voucher.id)).where(Voucher.companyId == companyId))
+    storage_meta = _enrich_company_storage_metadata(companyId)
     return {
         "success": True,
         "data": {
             "companyId": companyId,
             "hasVouchers": (v_count or 0) > 0,
             "voucherCount": v_count or 0,
-            "isReady": (v_count or 0) > 0
+            "isReady": (v_count or 0) > 0,
+            "isLocalAvailable": storage_meta["isLocalAvailable"],
+            "lastSyncTime": storage_meta["lastSyncTime"]
         }
     }
+
 
 @router.get("/{companyId}/ledgers")
 async def get_ledgers(
     companyId: str,
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=1000),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_comp_db)
 ):
     offset = (page - 1) * limit
     result = await db.execute(
@@ -289,21 +464,23 @@ async def get_ledgers(
         }
     }
 
+
 @router.get("/{companyId}/ledgers/{ledgerId}")
-async def get_ledger(companyId: str, ledgerId: str, db: AsyncSession = Depends(get_db)):
+async def get_ledger(companyId: str, ledgerId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(
         select(Ledger).where(Ledger.companyId == companyId, (Ledger.sourceObjectId == ledgerId) | (Ledger.id == ledgerId if ledgerId.isdigit() else False))
     )
     ledger = result.scalar_one_or_none()
     if not ledger:
-        raise ApiError.not_found(f"Ledger {ledgerId} not found", AppErrorCodes.RESOURCE_NOT_FOUND)
+        raise ApiError.not_found(f"Ledger {ledgerId} not found in local database", AppErrorCodes.RESOURCE_NOT_FOUND)
     return {
         "success": True,
         "data": unwrap_row(ledger)
     }
 
+
 @router.get("/{companyId}/groups")
-async def get_groups(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_groups(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(Group).where(Group.companyId == companyId))
     groups = result.scalars().all()
     return {
@@ -311,8 +488,9 @@ async def get_groups(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(g) for g in groups]
     }
 
+
 @router.get("/{companyId}/stock-items")
-async def get_stock_items(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_stock_items(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(StockItem).where(StockItem.companyId == companyId))
     items = result.scalars().all()
     return {
@@ -320,21 +498,23 @@ async def get_stock_items(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(i) for i in items]
     }
 
+
 @router.get("/{companyId}/stock-items/{stockItemId}")
-async def get_stock_item(companyId: str, stockItemId: str, db: AsyncSession = Depends(get_db)):
+async def get_stock_item(companyId: str, stockItemId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(
         select(StockItem).where(StockItem.companyId == companyId, (StockItem.sourceObjectId == stockItemId) | (StockItem.id == stockItemId if stockItemId.isdigit() else False))
     )
     item = result.scalar_one_or_none()
     if not item:
-        raise ApiError.not_found(f"Stock item {stockItemId} not found", AppErrorCodes.RESOURCE_NOT_FOUND)
+        raise ApiError.not_found(f"Stock item {stockItemId} not found in local database", AppErrorCodes.RESOURCE_NOT_FOUND)
     return {
         "success": True,
         "data": unwrap_row(item)
     }
 
+
 @router.get("/{companyId}/stock-groups")
-async def get_stock_groups(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_stock_groups(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(StockGroup).where(StockGroup.companyId == companyId))
     items = result.scalars().all()
     return {
@@ -342,8 +522,9 @@ async def get_stock_groups(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(i) for i in items]
     }
 
+
 @router.get("/{companyId}/cost-centres")
-async def get_cost_centres(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_cost_centres(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(CostCentre).where(CostCentre.companyId == companyId))
     items = result.scalars().all()
     return {
@@ -351,8 +532,9 @@ async def get_cost_centres(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(i) for i in items]
     }
 
+
 @router.get("/{companyId}/godowns")
-async def get_godowns(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_godowns(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(Godown).where(Godown.companyId == companyId))
     items = result.scalars().all()
     return {
@@ -360,8 +542,9 @@ async def get_godowns(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(i) for i in items]
     }
 
+
 @router.get("/{companyId}/units")
-async def get_units(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_units(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(Unit).where(Unit.companyId == companyId))
     items = result.scalars().all()
     return {
@@ -369,8 +552,9 @@ async def get_units(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(i) for i in items]
     }
 
+
 @router.get("/{companyId}/voucher-types")
-async def get_voucher_types(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_voucher_types(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(VoucherType).where(VoucherType.companyId == companyId))
     items = result.scalars().all()
     return {
@@ -378,9 +562,10 @@ async def get_voucher_types(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(i) for i in items]
     }
 
+
 @router.get("/{companyId}/customers")
 @router.get("/{companyId}/suppliers")
-async def get_parties(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_parties(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(Ledger).where(Ledger.companyId == companyId).limit(100))
     ledgers = result.scalars().all()
     return {
@@ -388,12 +573,13 @@ async def get_parties(companyId: str, db: AsyncSession = Depends(get_db)):
         "data": [unwrap_row(l) for l in ledgers]
     }
 
+
 @router.get("/{companyId}/vouchers")
 async def get_vouchers(
     companyId: str,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=1000),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_comp_db)
 ):
     offset = (page - 1) * limit
     result = await db.execute(
@@ -411,25 +597,27 @@ async def get_vouchers(
         }
     }
 
+
 @router.get("/{companyId}/vouchers/{voucherId}")
-async def get_voucher(companyId: str, voucherId: str, db: AsyncSession = Depends(get_db)):
+async def get_voucher(companyId: str, voucherId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(
         select(Voucher).where(Voucher.companyId == companyId, (Voucher.sourceObjectId == voucherId) | (Voucher.id == voucherId if voucherId.isdigit() else False))
     )
     voucher = result.scalar_one_or_none()
     if not voucher:
-        raise ApiError.not_found(f"Voucher {voucherId} not found", AppErrorCodes.RESOURCE_NOT_FOUND)
+        raise ApiError.not_found(f"Voucher {voucherId} not found in local database", AppErrorCodes.RESOURCE_NOT_FOUND)
     return {
         "success": True,
         "data": unwrap_row(voucher)
     }
+
 
 @router.get("/{companyId}/sales-analysis")
 async def get_sales_analysis(
     companyId: str,
     fromDate: Optional[str] = Query(None),
     toDate: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_comp_db)
 ):
     dash = await compute_dashboard_data(db, companyId, fromDate, toDate)
     kpi_sales = dash.get("kpis", {}).get("sales", {})
@@ -448,12 +636,13 @@ async def get_sales_analysis(
         }
     }
 
+
 @router.get("/{companyId}/purchase-analysis")
 async def get_purchase_analysis(
     companyId: str,
     fromDate: Optional[str] = Query(None),
     toDate: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_comp_db)
 ):
     dash = await compute_dashboard_data(db, companyId, fromDate, toDate)
     kpi_pur = dash.get("kpis", {}).get("purchases", {})
@@ -470,14 +659,20 @@ async def get_purchase_analysis(
         }
     }
 
+
 @router.get("/{companyId}/dashboard")
 async def get_dashboard(
     companyId: str,
     fromDate: Optional[str] = Query(None),
     toDate: Optional[str] = Query(None),
     topN: int = Query(7),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_comp_db)
 ):
+    """
+    Computes real-time dashboard KPIs, monthly charts, and cash/revenue metrics
+    directly from the company's dedicated local SQLite database without requiring
+    an active Tally connection.
+    """
     payload = await compute_dashboard_data(
         db=db,
         company_id=companyId,
@@ -485,14 +680,17 @@ async def get_dashboard(
         to_date_raw=toDate,
         top_n=topN
     )
-    # Dual-mount so both top-level and .data match whatever frontend client expects
+    storage_meta = _enrich_company_storage_metadata(companyId)
     payload["data"] = {
         "kpis": payload.get("kpis", {}),
         "trends": payload.get("monthly", []),
         "monthly": payload.get("monthly", []),
-        "voucherMix": payload.get("voucherMix", [])
+        "voucherMix": payload.get("voucherMix", []),
+        "storage": storage_meta
     }
+    payload.update(storage_meta)
     return payload
+
 
 @router.get("/{companyId}/reconciliation-report")
 async def get_reconciliation_report(companyId: str):
@@ -505,23 +703,32 @@ async def get_reconciliation_report(companyId: str):
         }
     }
 
+
 @router.get("/{companyId}")
-async def get_company(companyId: str, db: AsyncSession = Depends(get_db)):
+async def get_company(companyId: str, db: AsyncSession = Depends(get_comp_db)):
     result = await db.execute(select(Company).where(Company.companyId == companyId))
     company = result.scalar_one_or_none()
+    meta = company_folder_service.ensure_company_structure(companyId)
     if not company:
-        raise ApiError.not_found(f"Company {companyId} not found", AppErrorCodes.COMPANY_NOT_FOUND)
-    data = unwrap_row(company)
-    meta = company_folder_service.ensure_company_structure(company.companyId, company.name)
-    data["tallyFolder"] = meta.get("folderName")
-    data["tallyCompanyNumber"] = meta.get("companyNumber")
+        data = {
+            "companyId": companyId,
+            "name": meta.get("companyName", companyId),
+            "isOpen": True
+        }
+    else:
+        data = unwrap_row(company)
+
+    storage_meta = _enrich_company_storage_metadata(companyId, company)
+    data.update(storage_meta)
     return {
         "success": True,
-        "data": data
+        "data": data,
+        **storage_meta
     }
 
+
 # --------------------------------------------------------------------------
-# TALLY-STYLE FOLDER STORAGE & BACKUPS PER COMPANY
+# TALLY-STYLE FOLDER STORAGE, BACKUPS & RESTORE PER COMPANY
 # --------------------------------------------------------------------------
 
 @router.get("/{companyId}/storage")
@@ -533,6 +740,7 @@ async def get_company_storage(companyId: str):
         "companyId": companyId,
         "data": stats
     }
+
 
 @router.post("/{companyId}/backup")
 async def trigger_company_backup(
@@ -551,6 +759,38 @@ async def trigger_company_backup(
     except Exception as e:
         raise ApiError(500, f"Failed to create backup: {str(e)}", AppErrorCodes.INTERNAL_ERROR)
 
+
+@router.post("/{companyId}/restore")
+async def restore_company_backup(
+    companyId: str,
+    payload: Dict[str, Any] = Body(...)
+):
+    """
+    Safely restores a company's data and database from a designated .zip backup.
+    Guarantees isolation: rejects restore if backup manifest companyId doesn't match!
+    """
+    backup_filename = payload.get("backupFilename") or payload.get("filename")
+    if not backup_filename:
+        raise ApiError.bad_request("backupFilename is required", AppErrorCodes.VALIDATION_ERROR)
+
+    # First release any open database engine handles for this company
+    await company_db_manager.close_engine(companyId)
+
+    try:
+        result = company_folder_service.restore_backup(companyId, backup_filename)
+        return {
+            "success": True,
+            "message": f"Company '{companyId}' successfully restored from {backup_filename}",
+            "data": result
+        }
+    except ValueError as ve:
+        raise ApiError.bad_request(str(ve), AppErrorCodes.VALIDATION_ERROR)
+    except FileNotFoundError as fe:
+        raise ApiError.not_found(str(fe), AppErrorCodes.RESOURCE_NOT_FOUND)
+    except Exception as e:
+        raise ApiError(500, f"Restore failed: {str(e)}", AppErrorCodes.INTERNAL_ERROR)
+
+
 @router.get("/{companyId}/backups")
 async def get_company_backups(companyId: str):
     """Lists all available .zip backups inside the company folder."""
@@ -561,6 +801,35 @@ async def get_company_backups(companyId: str):
         "count": len(backups),
         "data": backups
     }
+
+
+@router.get("/{companyId}/sync-state")
+async def get_company_sync_state(companyId: str):
+    """Returns local sync state and checkpoints from sync/sync-state.json."""
+    state = company_folder_service.load_sync_state(companyId)
+    return {
+        "success": True,
+        "companyId": companyId,
+        "data": state
+    }
+
+
+@router.get("/{companyId}/sync-errors")
+async def get_company_sync_errors(companyId: str, limit: int = Query(50)):
+    """Returns recent error logs from sync/sync-errors.log."""
+    sync_dir = company_folder_service.get_company_sync_dir(companyId)
+    err_file = sync_dir / "sync-errors.log"
+    lines = []
+    if err_file.exists():
+        with open(err_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+    return {
+        "success": True,
+        "companyId": companyId,
+        "count": len(lines),
+        "data": lines[-limit:]
+    }
+
 
 @router.post("/{companyId}/open-folder")
 async def open_company_folder(companyId: str):
@@ -590,16 +859,17 @@ async def open_company_folder(companyId: str):
             "data": {"folderPath": path_str}
         }
 
+
 @router.get("/{companyId}/outstandings")
 async def get_company_outstandings(
     companyId: str,
     partyType: Optional[str] = Query(None, description="CUSTOMER or VENDOR"),
     isOverdue: Optional[bool] = Query(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_comp_db)
 ):
     """
     Returns bill-wise receivables/payables (COA / VOA) with 4 aging buckets:
-    0-30 days, 31-60 days, 61-90 days, 90+ days.
+    0-30 days, 31-60 days, 61-90 days, 90+ days directly from the company database.
     """
     query = select(BillOutstanding).where(BillOutstanding.companyId == companyId)
     if partyType:
@@ -614,7 +884,6 @@ async def get_company_outstandings(
     total_payable = sum(b.pendingAmount for b in bills if b.partyType == "VENDOR")
     total_overdue = sum(b.pendingAmount for b in bills if b.isOverdue)
 
-    # Aging calculation
     aging = {"0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
     for b in bills:
         days = b.overdueDays

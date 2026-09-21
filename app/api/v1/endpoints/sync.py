@@ -57,8 +57,13 @@ async def get_sync_status(
         finished_at = s.get("lastFinishedAt")
         if finished_at and (not latest_finished_at or str(finished_at) > str(latest_finished_at)):
             latest_finished_at = str(finished_at)
+        cid = s.get("companyId", "")
+        folder_meta = company_folder_service.ensure_company_structure(cid) if cid else {}
+        db_path = company_folder_service.get_company_db_path(cid) if cid else None
+        has_local = db_path.exists() and db_path.stat().st_size > 0 if db_path else False
+
         companies.append({
-            "companyId": s.get("companyId"),
+            "companyId": cid,
             "companyName": s.get("companyName"),
             "status": s.get("status") or "IDLE",
             "lastRunId": s.get("lastRunId"),
@@ -70,7 +75,10 @@ async def get_sync_status(
             "totalRecords": s.get("totalRecords") or 0,
             "changedRecords": s.get("changedRecords") or 0,
             "runCount": s.get("runCount") or 0,
-            "domains": s.get("domains") or {}
+            "domains": s.get("domains") or {},
+            "folderName": folder_meta.get("folderName"),
+            "isLocalAvailable": has_local,
+            "databaseSizeBytes": db_path.stat().st_size if has_local else 0
         })
 
     is_running = live_status.get("isRunning", False)
@@ -170,6 +178,64 @@ async def get_mirror_counts(companyId: str, db: AsyncSession = Depends(get_db)):
             "vouchers": v_count or 0,
             "ledgers": l_count or 0
         }
+    }
+
+@router.get("/{companyId}/state")
+async def get_sync_state_for_company(companyId: str):
+    """Retrieves sync-state.json checkpoints and telemetry for a specific company."""
+    state = company_folder_service.load_sync_state(companyId)
+    return {
+        "success": True,
+        "companyId": companyId,
+        "data": state
+    }
+
+@router.get("/{companyId}/errors")
+async def get_sync_errors_for_company(companyId: str, limit: int = 50):
+    """Retrieves sync error history from sync/sync-errors.log."""
+    sync_dir = company_folder_service.get_company_sync_dir(companyId)
+    log_file = sync_dir / "sync-errors.log"
+    errors = []
+    if log_file.exists():
+        with open(log_file, "r", encoding="utf-8") as f:
+            errors = [l.strip() for l in f.readlines() if l.strip()]
+    return {
+        "success": True,
+        "companyId": companyId,
+        "count": len(errors),
+        "data": errors[-limit:]
+    }
+
+@router.post("/{companyId}/retry")
+async def retry_sync_for_company(companyId: str, payload: Optional[Dict[str, Any]] = Body(default=None)):
+    """Triggers an immediate background synchronization retry for the specified company."""
+    body = payload or {}
+    meta = company_folder_service.ensure_company_structure(companyId)
+    comp_name = body.get("companyName") or meta.get("companyName") or companyId
+    
+    active = tally_sync_engine.get_active_progress()
+    if active.get("isSyncing"):
+        return {
+            "success": True,
+            "message": "A sync cycle is already running in background",
+            "alreadyRunning": True,
+            "data": active
+        }
+
+    asyncio.create_task(
+        tally_sync_engine.run_sync(
+            company_id=companyId,
+            company_name=comp_name,
+            from_date=body.get("fromDate"),
+            to_date=body.get("toDate"),
+            reports_to_run=body.get("reports")
+        )
+    )
+
+    return {
+        "success": True,
+        "message": f"Sync retry launched for company '{comp_name}'",
+        "companyId": companyId
     }
 
 @router.get("/tally-event", operation_id="get_tally_webhook_event")
