@@ -1,9 +1,0 @@
-{
-  "experimentId": "EXP-01",
-  "runId": "exp01_1787044614133",
-  "timestamp": "2026-08-18T09:16:54.133Z",
-  "platform": "win32",
-  "nodeVersion": "v25.9.0",
-  "selectedTransport": "NONE",
-  "overallStatus": "PASS"
-}
