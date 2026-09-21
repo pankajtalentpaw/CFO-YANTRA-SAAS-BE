@@ -7,7 +7,20 @@ Enables WAL mode and busy_timeout on SQLite for safe non-blocking concurrency.
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy import event
+from pathlib import Path
 from app.core.config import settings
+
+# Auto-create directory for SQLite file if it does not exist
+if "sqlite" in settings.async_database_url:
+    raw_url = settings.async_database_url
+    prefix = "sqlite+aiosqlite:///"
+    if raw_url.startswith(prefix):
+        db_file_str = raw_url[len(prefix):]
+        if db_file_str and db_file_str != ":memory:":
+            try:
+                Path(db_file_str).parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
 
 # Configure SQLite WAL pragmas for safe concurrent access
 engine = create_async_engine(

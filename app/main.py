@@ -28,6 +28,14 @@ from app.core.socket import sio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure storage and data directories exist
+    from pathlib import Path
+    try:
+        Path(settings.DATA_ROOT_DIR).mkdir(parents=True, exist_ok=True)
+        Path(settings.COMPANIES_DATA_DIR).mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
     # Startup: Ensure all database tables exist
     from app.core.database import engine
     from app.models import Base
