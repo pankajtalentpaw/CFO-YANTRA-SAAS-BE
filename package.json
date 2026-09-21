@@ -7,28 +7,13 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "lint": "eslint .",
-    "test": "jest",
+    "build": "node --check src/server.js",
     "probe": "node src/scripts/probe.js",
     "tally:capabilities": "node src/scripts/capabilities.js",
     "tally:xml": "node src/scripts/tallyXml.js",
     "tally:json": "node src/scripts/tallyJson.js",
     "tally:jsonex": "node src/scripts/tallyJsonEx.js",
-    "tally:compare": "node src/scripts/compare.js",
-    "experiment:01": "node src/scripts/experiment01.js",
-    "experiment:02": "node src/scripts/experiment02.js",
-    "experiment:03": "node src/scripts/experiment03.js",
-    "experiment:04": "node src/scripts/experiment04.js",
-    "experiment:05": "node src/scripts/experiment05.js",
-    "experiment:06": "node src/scripts/experiment06.js",
-    "experiment:07": "node src/scripts/experiment07.js",
-    "experiment:08": "node src/scripts/experiment08.js",
-    "experiment:09": "node src/scripts/experiment09.js",
-    "experiment:10": "node src/scripts/experiment10.js"
-  },
-  "jest": {
-    "setupFiles": [
-      "<rootDir>/tests/setupTestEnv.js"
-    ]
+    "tally:compare": "node src/scripts/compare.js"
   },
   "keywords": [
     "tally",
@@ -60,7 +45,6 @@
     "@eslint/js": "^10.0.1",
     "eslint": "^10.9.1",
     "globals": "^17.11.0",
-    "jest": "^30.4.2",
     "nodemon": "^3.1.14"
   }
 }

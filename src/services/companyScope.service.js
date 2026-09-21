@@ -97,7 +97,12 @@ function isCacheable(value) {
 
 /** Drop cached data. Scoped to one company when a companyId is given. */
 function invalidate(companyId) {
-  if (!companyId) return cache.clear();
+  if (!companyId) {
+    cache.clear();
+    openVerificationCache.clear();
+    return;
+  }
+  openVerificationCache.delete(companyId);
   for (const key of cache.keys()) {
     if (key.startsWith(`${companyId}::`)) cache.delete(key);
   }
@@ -171,21 +176,39 @@ async function listCompanies({ fresh = false, allowStale = false, force = false,
   return cached("__companies__", load, DISCOVERY_TTL_MS, { allowStale });
 }
 
+// Cache of recently verified open companyIds (ttl: 10s) so rapid loops (e.g. sync across domains)
+// do not hammer Tally with 11 back-to-back listCompanies calls.
+const openVerificationCache = new Map();
+
 /**
  * Confirm a company is still open in TallyPrime right now.
  * Called before any company-scoped extraction, because sending
  * SVCURRENTCOMPANY for a closed company crashes Tally.
  *
  * @param {object} company
+ * @param {object} [options]
+ * @param {number} [options.ttlMs=10000]
  * @returns {Promise<boolean>}
  */
-async function isCompanyStillOpen(company) {
+async function isCompanyStillOpen(company, { ttlMs = 10000, fresh = false } = {}) {
   if (!company || !company.companyId) return false;
-  // Deliberately uncached: this check exists to prevent a Tally crash, so a
-  // cached "yes" from a moment ago is not good enough.
+
+  if (!fresh && process.env.NODE_ENV !== "test") {
+    const lastChecked = openVerificationCache.get(company.companyId);
+    if (lastChecked && Date.now() - lastChecked < ttlMs) {
+      return true;
+    }
+  }
+
   const discovery = await listCompanies({ fresh: true });
   if (!discovery.success) return false;
-  return discovery.companies.some((c) => c.companyId === company.companyId);
+  const isOpen = discovery.companies.some((c) => c.companyId === company.companyId);
+  if (isOpen) {
+    openVerificationCache.set(company.companyId, Date.now());
+  } else {
+    openVerificationCache.delete(company.companyId);
+  }
+  return isOpen;
 }
 
 /**

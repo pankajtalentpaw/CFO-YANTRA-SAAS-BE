@@ -551,6 +551,68 @@ function buildCapabilityDiscoveryRequest(companyName) {
   ], companyName);
 }
 
+/**
+ * Safe 500-record batch extraction using AlterId window.
+ * Limits extraction to a small slice so Tally Prime memory stays under 100MB
+ * and single-threaded event loop is never blocked.
+ *
+ * @param {string} companyName
+ * @param {number} startAlterId
+ * @param {number} endAlterId
+ * @param {object} [options]
+ */
+function buildBatchVouchersRequest(companyName, startAlterId, endAlterId, options = {}) {
+  const { includeLedgerEntries = false, includeInventoryEntries = false } = options;
+
+  const fetches = [
+    "Date",
+    "Guid",
+    "MasterId",
+    "AlterId",
+    "VoucherTypeName",
+    "VoucherNumber",
+    "PartyLedgerName",
+    "Narration",
+    "IsCancelled",
+    "IsOptional",
+    "Amount"
+  ];
+  if (includeLedgerEntries) fetches.push("AllLedgerEntries.*");
+  if (includeInventoryEntries) fetches.push("AllInventoryEntries.*");
+
+  const fetchesXml = fetches.map((f) => `            <FETCH>${escapeXml(f)}</FETCH>`).join("\n");
+
+  return `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>BatchVoucherCollection</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        ${companyName ? `<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>` : ""}
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="BatchVoucherCollection" ISMODIFY="No">
+            <TYPE>Voucher</TYPE>
+${fetchesXml}
+            <FILTER>BatchAlterIdFilter</FILTER>
+          </COLLECTION>
+          <SYSTEM TYPE="Formulae" NAME="BatchAlterIdFilter">
+            $AlterId &gt;= ${Number(startAlterId) || 0} AND $AlterId &lt;= ${Number(endAlterId) || 0}
+          </SYSTEM>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`.trim();
+}
+
 module.exports = {
   escapeXml,
   buildEnvelope,
@@ -572,8 +634,10 @@ module.exports = {
   buildGodownsRequest,
   buildTrialBalanceRequest,
   buildVouchersRequest,
+  buildBatchVouchersRequest,
   buildBillWiseOutstandingRequest,
   buildIncrementalSyncRequest,
   buildLightweightVoucherKeysRequest
 };
+
 

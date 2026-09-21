@@ -3,6 +3,7 @@ const env = require("../config/env");
 const { SyncState, Company } = require("../models");
 const tallySyncJob = require("../jobs/tallySync.job");
 const mirror = require("../services/sync/mirror.service");
+const { getActiveSyncProgress } = require("../services/sync/syncEngine.service");
 
 /**
  * Live sync status: whether the mirror is connected, whether the loop is
@@ -11,6 +12,8 @@ const mirror = require("../services/sync/mirror.service");
 async function getSyncStatus(req, res) {
   const connected = isConnected();
   const job = tallySyncJob.getState();
+  const activeSync = typeof getActiveSyncProgress === "function" ? getActiveSyncProgress() : { isSyncing: false };
+  const isSyncRunning = Boolean(job.running || activeSync.isSyncing);
 
   let companies = [];
   if (connected) {
@@ -38,7 +41,8 @@ async function getSyncStatus(req, res) {
   );
 
   return res.json({
-    status: connected ? (job.running ? "SYNCING" : "READY") : "MIRROR_UNAVAILABLE",
+    status: connected ? (isSyncRunning ? "SYNCING" : "READY") : "MIRROR_UNAVAILABLE",
+    activeSync,
     mirror: {
       enabled: env.db.enabled,
       connected,

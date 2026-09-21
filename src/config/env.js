@@ -67,6 +67,9 @@ module.exports = {
     intervalMs: parsedEnv.SYNC_INTERVAL_MS,
     startDelayMs: parsedEnv.SYNC_START_DELAY_MS,
     vouchers: parsedEnv.SYNC_VOUCHERS,
-    voucherEntries: parsedEnv.SYNC_VOUCHER_ENTRIES
+    voucherEntries: parsedEnv.SYNC_VOUCHER_ENTRIES,
+    batchSize: parsedEnv.SYNC_BATCH_SIZE,
+    batchPauseMs: parsedEnv.SYNC_BATCH_PAUSE_MS,
+    cdcIntervalMs: parsedEnv.CDC_INTERVAL_MS
   }
 };

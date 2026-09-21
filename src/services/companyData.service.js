@@ -22,7 +22,8 @@ const {
   buildCostCategoriesRequest,
   buildVoucherTypesRequest,
   buildCurrenciesRequest,
-  buildVouchersRequest
+  buildVouchersRequest,
+  buildBatchVouchersRequest
 } = require("../integrations/tally/tally.requests");
 const { buildSalesLedgerRequest } = require("../integrations/tally/sales/sales.requests");
 const { normalizeCanonicalLedger, normalizeCanonicalGroup } = require("../integrations/tally/canonical/accounting.canonical");
@@ -237,6 +238,57 @@ async function getVouchers(company, { fromDate, toDate, includeEntries = false, 
   if (mirroredFallback) return mirroredFallback;
 
   return res || { available: true, records: [], source: "mirror", fetchedAt: new Date().toISOString() };
+}
+
+/**
+ * High-speed retrieval of lightweight voucher keys (guid, masterId, alterId)
+ * to orchestrate safe 500-record batch processing.
+ */
+async function getVouchersKeyList(company) {
+  const { normalizeArray, extractValue } = require("../integrations/tally/tally.parser");
+  const { buildLightweightVoucherKeysRequest } = require("../integrations/tally/tally.requests");
+
+  const xml = buildLightweightVoucherKeysRequest(company.name);
+  let res;
+  try {
+    res = await sendXmlRequest({ xml });
+  } catch (_) {
+    return [];
+  }
+  if (!res || !res.parsedResponse || !res.parsedResponse.collection) return [];
+
+  const rawList = normalizeArray(res.parsedResponse.collection);
+  const keys = [];
+  for (const raw of rawList) {
+    if (!raw) continue;
+    const guid = (extractValue(raw.GUID || raw.Guid) || "").trim();
+    const alterId = Number(extractValue(raw.ALTERID || raw.AlterId)) || 0;
+    const masterId = Number(extractValue(raw.MASTERID || raw.MasterId)) || 0;
+    if (guid || alterId || masterId) {
+      keys.push({ guid, masterId, alterId });
+    }
+  }
+
+  // Sort by AlterId ascending
+  keys.sort((a, b) => a.alterId - b.alterId);
+  return keys;
+}
+
+/**
+ * Fetch a targeted 500-record batch of vouchers bounded by AlterId.
+ */
+async function getVouchersBatch(company, startAlterId, endAlterId, { includeEntries = false } = {}) {
+  return extract(company, {
+    builder: (name) => buildBatchVouchersRequest(name, startAlterId, endAlterId, {
+      includeLedgerEntries: includeEntries,
+      includeInventoryEntries: includeEntries
+    }),
+    normalize: (node) => normalizeSalesVoucher(node, {
+      companyId: company.companyId,
+      companyGuid: company.guid || null
+    }),
+    source: "voucherRegisterBatch"
+  });
 }
 
 /**
@@ -854,6 +906,8 @@ module.exports = {
   extract,
   getDomain,
   getVouchers,
+  getVouchersKeyList,
+  getVouchersBatch,
   getVoucherById,
   getPartyStateResolver,
   getPartyProfileResolver,

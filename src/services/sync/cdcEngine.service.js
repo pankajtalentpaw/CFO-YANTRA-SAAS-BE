@@ -1,5 +1,6 @@
+const env = require("../../config/env");
 const { isConnected } = require("../../config/db");
-const { Voucher, Company } = require("../../models");
+const { Voucher, Company, SyncState } = require("../../models");
 const { sendXml, checkHeartbeat } = require("../../integrations/tally/tally.client");
 const { buildIncrementalSyncRequest } = require("../../integrations/tally/tally.requests");
 const { parseTallyResponse, normalizeArray, extractValue } = require("../../integrations/tally/tally.parser");
@@ -15,10 +16,10 @@ const mirror = require("./mirror.service");
 const realtimeSocket = require("../realtimeSocket.service");
 const { logger } = require("../../utils/logger");
 
-const DEFAULT_CDC_INTERVAL_MS = 15000; // Safe 15s cadence to avoid overwhelming Tally's single-threaded server
+const DEFAULT_CDC_INTERVAL_MS = (env.sync && env.sync.cdcIntervalMs) || 30000; // Safe 30s cadence to avoid overwhelming Tally
 
-/** Ticks between full deletion scans. At the 15s cadence this is ~2 minutes. */
-const DELETION_SCAN_EVERY_N_TICKS = 8;
+/** Ticks between full deletion scans (~20 minutes at 30s cadence) */
+const DELETION_SCAN_EVERY_N_TICKS = 40;
 
 let cdcTimer = null;
 let isCycleRunning = false;
@@ -51,18 +52,37 @@ async function getOrInitCursor(companyId, companyName) {
    */
   let highestAlterId = 0;
   try {
-    const docs = await Voucher.findAll({
-      where: { companyId },
-      attributes: ["data"],
-      order: [["id", "DESC"]],
-      limit: 50,
-      raw: true
-    });
-    for (const doc of docs) {
-      const alterId = doc.data && doc.data.alterId;
-      if (alterId) {
-        const idNum = Number(alterId) || 0;
-        if (idNum > highestAlterId) highestAlterId = idNum;
+    // 1. Check if SyncState has a saved CDC cursor
+    const syncState = await SyncState.findByPk(companyId);
+    if (syncState && syncState.domains && syncState.domains.cdc && syncState.domains.cdc.lastAlterId) {
+      highestAlterId = Number(syncState.domains.cdc.lastAlterId) || 0;
+    }
+
+    // 2. If not in SyncState, check recent mirrored vouchers
+    if (!highestAlterId) {
+      const docs = await Voucher.findAll({
+        where: { companyId },
+        attributes: ["data"],
+        order: [["id", "DESC"]],
+        limit: 50,
+        raw: true
+      });
+      for (const doc of docs) {
+        const rawData = typeof doc.data === "string" ? JSON.parse(doc.data) : doc.data;
+        const alterId = rawData && rawData.alterId;
+        if (alterId) {
+          const idNum = Number(alterId) || 0;
+          if (idNum > highestAlterId) highestAlterId = idNum;
+        }
+      }
+    }
+
+    // 3. HARD SAFETY GATE: If highestAlterId is STILL 0, use Company baseline alterId!
+    // Never let CDC query $AlterId > 0 against an existing company with thousands of vouchers!
+    if (!highestAlterId) {
+      const comp = await Company.findByPk(companyId);
+      if (comp && comp.alterId) {
+        highestAlterId = Number(comp.alterId) || 0;
       }
     }
   } catch (err) {
@@ -93,9 +113,10 @@ async function runCdcForCompany(companyId, companyName, { scanDeletions = true }
     const currentAlterId = cursor.lastVoucherAlterId;
 
     // 1. Fetch inserted or updated vouchers with AlterId > currentAlterId
+    // Respect configured voucher entries flag so Tally does not crash on entries
     const reqXml = buildIncrementalSyncRequest(companyName, currentAlterId, {
-      includeLedgerEntries: true,
-      includeInventoryEntries: true
+      includeLedgerEntries: env.sync.voucherEntries,
+      includeInventoryEntries: env.sync.voucherEntries
     });
 
     const tallyRes = await sendXml(reqXml);
@@ -162,12 +183,30 @@ async function runCdcForCompany(companyId, companyName, { scanDeletions = true }
       }
 
       cursor.lastVoucherAlterId = newMaxAlterId;
+      // Persist cursor to SyncState to maintain continuity across restarts
+      try {
+        const currentState = await SyncState.findByPk(companyId);
+        const existingDomains = (currentState && currentState.domains) || {};
+        await SyncState.upsert({
+          companyId,
+          companyName,
+          domains: {
+            ...existingDomains,
+            cdc: {
+              lastAlterId: newMaxAlterId,
+              lastTickAt: new Date(),
+              totalInserts: cursor.totalInserts,
+              totalUpdates: cursor.totalUpdates
+            }
+          }
+        });
+      } catch (_) {}
     }
 
     // 2. Deletion detection, but not on every tick. It costs a second Tally
     // query plus a full scan of the company's active vouchers, and it runs
     // while holding the global Tally lock that user requests also queue on.
-    // Vouchers are deleted rarely; paying that every 15s starved the pages.
+    // Vouchers are deleted rarely; paying that frequently starved the pages.
     if (scanDeletions) {
       const delResult = await detectAndReconcileDeletions(companyId, companyName);
       if (delResult.deletedCount > 0) {
@@ -197,6 +236,15 @@ async function cdcTick() {
   if (isCycleRunning || !isEngineActive) return;
   if (!isConnected()) return;
 
+  // Do not compete with full sync cycle: Tally is single-threaded
+  try {
+    const tallySyncJob = require("../../jobs/tallySync.job");
+    if (tallySyncJob.getState().running) {
+      logger.debug("CDC tick skipped - full sync cycle is currently running");
+      return;
+    }
+  } catch (_) {}
+
   // Pre-flight check: is Tally responding?
   try {
     const hb = await checkHeartbeat({ quick: true });
@@ -217,7 +265,8 @@ async function cdcTick() {
     }
 
     tickCount += 1;
-    const scanDeletions = tickCount % DELETION_SCAN_EVERY_N_TICKS === 1;
+    // Only scan deletions after baseline is established, avoiding initial startup spike
+    const scanDeletions = tickCount > 1 && tickCount % DELETION_SCAN_EVERY_N_TICKS === 0;
 
     for (const comp of discovery.companies) {
       await runCdcForCompany(comp.companyId, comp.name, { scanDeletions });
@@ -235,16 +284,16 @@ async function cdcTick() {
 function startCdcEngine(customIntervalMs) {
   if (cdcTimer) return true;
   isEngineActive = true;
-  const intervalMs = Number(customIntervalMs) || DEFAULT_CDC_INTERVAL_MS;
+  const intervalMs = Number(customIntervalMs) || (env.sync && env.sync.cdcIntervalMs) || DEFAULT_CDC_INTERVAL_MS;
   logger.info({ intervalMs }, "Starting Tally Real-Time CDC Engine");
 
-  // Initial delay of 10s before first tick to let startup stabilize
+  // Initial delay of 15s before first tick to let startup and initial full sync stabilize
   setTimeout(() => {
     if (!isEngineActive) return;
     cdcTick();
     cdcTimer = setInterval(cdcTick, intervalMs);
     if (cdcTimer.unref) cdcTimer.unref();
-  }, 10000);
+  }, 15000);
 
   return true;
 }

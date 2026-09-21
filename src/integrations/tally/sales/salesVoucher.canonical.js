@@ -163,6 +163,7 @@ function normalizeSalesVoucher(raw, context = {}) {
 
   const guid = field(raw, "GUID", "Guid");
   const masterId = field(raw, "MASTERID", "MasterId");
+  const alterId = field(raw, "ALTERID", "AlterId");
   const voucherNumber = field(raw, "VOUCHERNUMBER", "VoucherNumber");
   const voucherType = field(raw, "VOUCHERTYPENAME", "VoucherTypeName");
   const voucherDate = toIso(raw.DATE || raw.Date);
@@ -229,6 +230,7 @@ function normalizeSalesVoucher(raw, context = {}) {
     isOptional: parseBooleanField(raw.ISOPTIONAL || raw.IsOptional),
     guid: guid || null,
     masterId: masterId ? Number(masterId) : null,
+    alterId: alterId ? Number(alterId) || null : null,
     ledgerEntries,
     inventoryEntries
   };

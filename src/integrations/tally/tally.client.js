@@ -1,9 +1,19 @@
+const http = require("http");
 const axios = require("axios");
 const env = require("../../config/env");
 const { assertReadOnlyXml } = require("./tally.readonly");
 const { buildProbeXml } = require("./tally.requests");
 const breaker = require("./tally.breaker");
 const { logger } = require("../../utils/logger");
+
+// Dedicated single-socket Agent with keep-alive to keep TallyPrime from leaking
+// descriptors or stacking orphaned connections in CloseWait/FinWait2.
+const tallyHttpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 1,
+  maxFreeSockets: 1,
+  timeout: 60000
+});
 
 function getEffectiveConfig() {
   try {
@@ -49,6 +59,7 @@ async function checkHeartbeat(options = {}) {
   try {
     const response = await axios.get(url, {
       timeout: timeoutMs,
+      httpAgent: tallyHttpAgent,
       validateStatus: () => true
     });
     if (response.status === 200 || response.status === 400 || response.status === 405) {
@@ -84,6 +95,7 @@ async function checkHeartbeat(options = {}) {
     const postRes = await axios.post(url, probeXml, {
       headers: { "Content-Type": "text/xml" },
       timeout: timeoutMs,
+      httpAgent: tallyHttpAgent,
       validateStatus: () => true
     });
 
@@ -136,6 +148,7 @@ async function sendXml(xml, options = {}) {
           "Content-Type": "text/xml"
         },
         timeout: timeoutMs,
+        httpAgent: tallyHttpAgent,
         responseType: "text",
         validateStatus: () => true
       });

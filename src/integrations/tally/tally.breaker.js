@@ -218,8 +218,11 @@ function runExclusive(fn, { maxWaitMs = DEFAULT_MAX_WAIT_MS } = {}) {
     return fn();
   }
 
-  // Swallow on the chain only: the caller still receives the real rejection.
-  tail = turn.then(() => undefined, () => undefined);
+  // Swallow on the chain with a polite breathing pause (100ms) so Tally's
+  // single-threaded Windows event loop gets a break between consecutive queries.
+  const MIN_GAP_MS = process.env.NODE_ENV === "test" ? 0 : 100;
+  const gap = () => (MIN_GAP_MS > 0 ? new Promise((r) => setTimeout(r, MIN_GAP_MS)) : Promise.resolve());
+  tail = turn.then(gap, gap);
 
   if (!maxWaitMs) return turn;
 

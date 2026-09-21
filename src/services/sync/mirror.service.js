@@ -3,6 +3,7 @@ const { isConnected } = require("../../config/db");
 const { Company, Voucher, DOMAIN_MODELS } = require("../../models");
 const { logger } = require("../../utils/logger");
 const { recordChecksum } = require("../../utils/checksum");
+const env = require("../../config/env");
 
 /**
  * Read/write layer over the local SQL database mirror.
@@ -50,6 +51,25 @@ function contentHash(record) {
   const stable = { ...record };
   for (const field of VOLATILE_FIELDS) delete stable[field];
   return recordChecksum(stable);
+}
+
+/**
+ * Records ke array ko N-size ke chunks mein todta hai.
+ * Batch processing ke liye use hota hai.
+ */
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/**
+ * Batches ke beech mein pause lene ke liye (ms milliseconds).
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parseData(data) {
@@ -101,8 +121,12 @@ function modelForDomain(domain) {
  * @returns {{total,inserted,updated,unchanged,tombstoned,skipped}}
  */
 async function upsertRecords(model, companyId, records, runId, { tombstoneMissing = true } = {}) {
+  const batchSize = env.sync.batchSize || 500;
+  const batchPauseMs = env.sync.batchPauseMs ?? 2000;
+
   const stats = { total: records.length, inserted: 0, updated: 0, unchanged: 0, tombstoned: 0, skipped: 0 };
 
+  // Saare existing records ek baar fetch karo (change-detection ke liye reference set).
   const existing = await model.findAll({
     where: { companyId },
     attributes: ["sourceObjectId", "contentHash", "isDeleted"],
@@ -112,7 +136,20 @@ async function upsertRecords(model, companyId, records, runId, { tombstoneMissin
 
   const now = new Date();
   const seen = new Set();
-  const toUpsert = [];
+
+  // -------------------------------------------------------------------------
+  // PRE-FILTER: Batches banane se pehle hi unchanged records hatao.
+  //
+  // Jo records DB mein already hain aur contentHash same hai, unhe batch loop
+  // mein ghusne ki zaroorat nahi. Yeh ek baar O(n) pass mein:
+  //   - `seen` set build karta hai (tombstone detection ke liye sab records chahiye)
+  //   - unchanged records count karta hai
+  //   - sirf naye ya changed records `toProcess` mein dalta hai
+  //
+  // Agar 5000 vouchers hain aur 4800 already DB mein hain to sirf 200 records
+  // process honge — 4800 ka loop bilkul nahi chalega.
+  // -------------------------------------------------------------------------
+  const toProcess = [];
 
   for (const record of records) {
     const sourceObjectId = record && record.sourceObjectId;
@@ -120,50 +157,115 @@ async function upsertRecords(model, companyId, records, runId, { tombstoneMissin
       stats.skipped++;
       continue;
     }
+    // Tombstone detection ke liye sab sourceObjectIds track karo.
     seen.add(sourceObjectId);
 
     const prior = known.get(sourceObjectId);
     const hash = contentHash(record);
 
-    // Unchanged and not tombstoned: nothing to write.
+    // Already DB mein hai, hash same hai, deleted nahi — bilkul skip karo.
     if (prior && prior.contentHash && prior.contentHash === hash && !prior.isDeleted) {
       stats.unchanged++;
       continue;
     }
 
-    const payload = {
-      ...record,
-      companyId,
-      sourceObjectId,
-      objectType: record.objectType || (model.options && model.options.name ? model.options.name.singular : model.name),
-      name: record.name || null,
-      parent: record.parent || null,
-      checksum: record.checksum || null,
-      contentHash: hash,
-      isDeleted: false,
-      deletedAt: null,
-      syncedAt: now,
-      lastRunId: runId,
-      data: record
-    };
+    // Naya record ya content change hua hai — process karna hai.
+    toProcess.push({ record, prior, hash });
+  }
 
-    if (model.name === "Voucher") {
-      // voucherDate is the column the register, the dashboard and every date
-      // window filter on, so a null here makes the voucher invisible even
-      // though the row is present and correct. Fall back through every shape a
-      // voucher has ever been written in rather than trust one of them.
-      const header = record.header || {};
-      payload.voucherDate = record.voucherDate || record.date || header.date || null;
-      payload.sourceVoucherNumber =
-        record.sourceVoucherNumber || record.voucherNumber || header.voucherNumber || null;
-      payload.header = record.header || null;
-      payload.entries = record.entries || null;
+  // -------------------------------------------------------------------------
+  // BATCH PROCESSING: sirf naye / changed records ko SYNC_BATCH_SIZE ke
+  // chunks mein process karo. Har chunk ke baad SYNC_BATCH_PAUSE_MS ki neend.
+  // -------------------------------------------------------------------------
+  const batches = chunkArray(toProcess, batchSize);
+  const totalBatches = batches.length;
+
+  logger.info(
+    {
+      companyId,
+      objectType: model.name,
+      totalRecords: records.length,
+      alreadySynced: stats.unchanged,
+      toProcess: toProcess.length,
+      batchSize,
+      totalBatches
+    },
+    toProcess.length === 0
+      ? "Koi naya ya changed record nahi — sab already synced hain"
+      : `Batch processing shuru — ${toProcess.length} records ${totalBatches} batches mein`
+  );
+
+  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    const batchNum = batchIdx + 1;
+    const toUpsert = [];
+
+    for (const { record, prior, hash } of batch) {
+      const sourceObjectId = record.sourceObjectId;
+
+      const payload = {
+        ...record,
+        companyId,
+        sourceObjectId,
+        objectType: record.objectType || (model.options && model.options.name ? model.options.name.singular : model.name),
+        name: record.name || null,
+        parent: record.parent || null,
+        checksum: record.checksum || null,
+        contentHash: hash,
+        isDeleted: false,
+        deletedAt: null,
+        syncedAt: now,
+        lastRunId: runId,
+        data: record
+      };
+
+      if (model.name === "Voucher") {
+        // voucherDate is the column the register, the dashboard and every date
+        // window filter on, so a null here makes the voucher invisible even
+        // though the row is present and correct. Fall back through every shape a
+        // voucher has ever been written in rather than trust one of them.
+        const header = record.header || {};
+        payload.voucherDate = record.voucherDate || record.date || header.date || null;
+        payload.sourceVoucherNumber =
+          record.sourceVoucherNumber || record.voucherNumber || header.voucherNumber || null;
+        payload.header = record.header || null;
+        payload.entries = record.entries || null;
+      }
+
+      toUpsert.push(payload);
+      if (prior) stats.updated++;
+      else stats.inserted++;
     }
 
-    toUpsert.push(payload);
-    if (prior) stats.updated++;
-    else stats.inserted++;
+    if (toUpsert.length > 0) {
+      for (const item of toUpsert) {
+        await model.upsert(item);
+      }
+    }
+
+    logger.info(
+      {
+        companyId,
+        objectType: model.name,
+        batch: `${batchNum}/${totalBatches}`,
+        batchRecords: batch.length,
+        written: toUpsert.length,
+        cumulative: { inserted: stats.inserted, updated: stats.updated }
+      },
+      `Batch ${batchNum}/${totalBatches} complete`
+    );
+
+    // Agar aur batches bachi hain toh pause lo.
+    if (batchIdx < batches.length - 1 && batchPauseMs > 0) {
+      await sleep(batchPauseMs);
+    }
   }
+
+  // -------------------------------------------------------------------------
+  // TOMBSTONING: Sirf tab chalega jab saare batches complete ho jayein aur
+  // 'seen' set mein saare processed records hain. CDC partial batches ke liye
+  // tombstoneMissing=false pass karta hai, isliye woh safe hain.
+  // -------------------------------------------------------------------------
 
   /*
    * Tally exposes no delete feed, so anything that stopped appearing is
@@ -196,12 +298,6 @@ async function upsertRecords(model, companyId, records, runId, { tombstoneMissin
       "Refusing to tombstone an implausible share of records in one pass - treating the read as partial"
     );
     vanished.length = 0;
-  }
-
-  if (toUpsert.length > 0) {
-    for (const item of toUpsert) {
-      await model.upsert(item);
-    }
   }
 
   if (vanished.length > 0) {

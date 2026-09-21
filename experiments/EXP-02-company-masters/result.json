@@ -1,6 +1,0 @@
-{
-  "experiment": "EXP-02",
-  "status": "BLOCKED",
-  "reason": "TALLY_UNREACHABLE",
-  "message": "TallyPrime is not responding on HTTP loopback. Ensure Tally is open with ODBC/HTTP enabled on port 9000."
-}

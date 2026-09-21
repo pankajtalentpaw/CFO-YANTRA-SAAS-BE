@@ -42,7 +42,18 @@ const envSchema = z.object({
   SYNC_INTERVAL_MS: z.coerce.number().int().min(5000).max(86400000).default(60000),
   SYNC_START_DELAY_MS: z.coerce.number().int().min(0).max(600000).default(5000),
   SYNC_VOUCHERS: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
-  SYNC_VOUCHER_ENTRIES: z.enum(["true", "false"]).default("true").transform((v) => v === "true")
+  SYNC_VOUCHER_ENTRIES: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+
+  // ---- Batch processing (chunked upsert with a short pause between batches) ----
+  // SYNC_BATCH_SIZE:     How many records to write in one DB pass. Keeps memory
+  //                      pressure flat on large companies (10k+ vouchers).
+  // SYNC_BATCH_PAUSE_MS: Milliseconds to sleep between batches so TallyPrime and
+  //                      the database both get a breath before the next chunk.
+  SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(10000).default(500),
+  SYNC_BATCH_PAUSE_MS: z.coerce.number().int().min(0).max(60000).default(2000),
+
+  // ---- Real-time CDC Interval ----
+  CDC_INTERVAL_MS: z.coerce.number().int().min(5000).max(3600000).default(30000)
 });
 
 module.exports = {
