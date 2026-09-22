@@ -43,10 +43,13 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
 
     if settings.ENABLE_BACKGROUND_JOBS:
-        pass
+        from app.services.sync.scheduler import background_scheduler
+        await background_scheduler.start()
     yield
-    # Shutdown: Clean up connections
-    pass
+    # Shutdown: Clean up scheduler and connections
+    if settings.ENABLE_BACKGROUND_JOBS:
+        from app.services.sync.scheduler import background_scheduler
+        await background_scheduler.stop()
 
 app = FastAPI(
     title="CFO Yantra Backend API",

@@ -177,6 +177,37 @@ class CompanyFolderService:
         (folder_path / "exports").mkdir(parents=True, exist_ok=True)
         (folder_path / "audit_logs").mkdir(parents=True, exist_ok=True)
 
+        # Ensure root sync_state.json exists
+        sync_state_file = folder_path / "sync_state.json"
+        if not sync_state_file.exists():
+            initial_state = {
+                "companyId": company_id_str,
+                "companyName": company_name or company_id_str,
+                "status": "INITIALIZED",
+                "lastSyncTime": None,
+                "isStale": True,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            }
+            tmp_s = folder_path / "sync_state.json.tmp"
+            with open(tmp_s, "w", encoding="utf-8") as sf:
+                json.dump(initial_state, sf, indent=2, ensure_ascii=False)
+            tmp_s.replace(sync_state_file)
+
+        # Ensure root company.json exists
+        comp_profile = folder_path / "company.json"
+        if not comp_profile.exists():
+            initial_profile = {
+                "companyId": company_id_str,
+                "name": company_name or company_id_str,
+                "companyName": company_name or company_id_str,
+                "_tallyFolder": meta.get("folderName"),
+                "_tallyCompanyNumber": meta.get("companyNumber")
+            }
+            tmp_p = folder_path / "company.json.tmp"
+            with open(tmp_p, "w", encoding="utf-8") as pf:
+                json.dump(initial_profile, pf, indent=2, ensure_ascii=False)
+            tmp_p.replace(comp_profile)
+
         return meta
 
     def get_company_folder(self, company_id: str) -> Optional[Path]:

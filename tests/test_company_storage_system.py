@@ -133,15 +133,15 @@ def test_3_migration_reconciliation_and_idempotency():
     print(f"  - Bill Outstandings reconciled: {dst.get('bill_outstandings')} / {src.get('bill_outstandings')} [OK]")
     print(f"  - Currencies reconciled: {dst.get('currencies')} / {src.get('currencies')} [OK]")
 
-    assert dst.get("vouchers") == 11266, f"Expected 11266 vouchers, got {dst.get('vouchers')}"
-    assert dst.get("ledgers") == 5469, f"Expected 5469 ledgers, got {dst.get('ledgers')}"
-    assert dst.get("stockitems") == 17726, f"Expected 17726 stock items, got {dst.get('stockitems')}"
-    assert dst.get("bill_outstandings") == 4, f"Expected 4 bill outstandings, got {dst.get('bill_outstandings')}"
+    assert dst.get("vouchers") == src.get("vouchers"), f"Voucher reconciliation mismatch: {dst.get('vouchers')} != {src.get('vouchers')}"
+    assert dst.get("ledgers") == src.get("ledgers"), f"Ledger reconciliation mismatch: {dst.get('ledgers')} != {src.get('ledgers')}"
+    assert dst.get("stockitems") == src.get("stockitems"), f"Stock item reconciliation mismatch: {dst.get('stockitems')} != {src.get('stockitems')}"
+    assert dst.get("bill_outstandings") == src.get("bill_outstandings"), f"Bill outstanding mismatch: {dst.get('bill_outstandings')} != {src.get('bill_outstandings')}"
 
     # Re-run migration to test idempotency (no duplicate rows should be introduced)
     re_run = asyncio.run(company_db_manager.migrate_records_from_central_db())
-    assert re_run["reconciliation"]["destinationTotals"]["vouchers"] == 11266, "Idempotency failure on vouchers!"
-    assert re_run["reconciliation"]["destinationTotals"]["ledgers"] == 5469, "Idempotency failure on ledgers!"
+    assert re_run["reconciliation"]["destinationTotals"]["vouchers"] == src.get("vouchers"), "Idempotency failure on vouchers!"
+    assert re_run["reconciliation"]["destinationTotals"]["ledgers"] == src.get("ledgers"), "Idempotency failure on ledgers!"
     print("[PASS] 100% Data reconciliation and idempotent re-run verified.")
 
 

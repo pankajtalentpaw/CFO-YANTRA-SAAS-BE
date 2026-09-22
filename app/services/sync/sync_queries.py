@@ -13,6 +13,15 @@ Mirrors Magenta BI's extraction requests for:
 
 from typing import List, Optional
 import defusedxml.ElementTree as ET
+import re
+
+def sanitize_tally_xml(raw_xml: str) -> str:
+    """Strips illegal XML 1.0 control character entities (e.g. &#4;) emitted by Tally."""
+    if not raw_xml:
+        return ""
+    return re.sub(r'&#(?:[0-8]|1[1-2]|1[4-9]|2[0-9]|3[0-1]);', '', raw_xml)
+
+
 
 
 def escape_xml_value(val: Optional[str]) -> str:
@@ -204,7 +213,7 @@ def build_collection_vouchers_xml(
 ) -> str:
     """
     Builds a targeted Tally Collection XML for Vouchers.
-    Supports date range filtering, voucher types, and AlterID incremental sync.
+    Supports date range filtering, voucher types (with native TDL classification), and AlterID incremental sync.
     """
     company_block = f'<SVCOMPANY>{escape_xml_value(company_name)}</SVCOMPANY><SVCURRENTCOMPANY>{escape_xml_value(company_name)}</SVCURRENTCOMPANY>' if company_name else ""
     alter_var = f'<MINALTERID>{min_alter_id}</MINALTERID>' if min_alter_id is not None else ""
@@ -213,9 +222,34 @@ def build_collection_vouchers_xml(
     formulas = []
 
     if voucher_types:
-        conditions = " OR ".join([f'($VoucherTypeName = "{escape_xml_value(vt)}")' for vt in voucher_types])
+        conditions = []
+        has_sales = any("sale" in vt.lower() for vt in voucher_types)
+        has_pur = any("purchase" in vt.lower() for vt in voucher_types)
+        has_cr = any("credit" in vt.lower() for vt in voucher_types)
+        has_dr = any("debit" in vt.lower() for vt in voucher_types)
+        has_pay = any("payment" in vt.lower() for vt in voucher_types)
+        has_rec = any("receipt" in vt.lower() for vt in voucher_types)
+
+        if has_sales:
+            conditions.append("$$IsSales:$VoucherTypeName")
+        if has_pur:
+            conditions.append("$$IsPurchase:$VoucherTypeName")
+        if has_cr:
+            conditions.append("$$IsCreditNote:$VoucherTypeName")
+        if has_dr:
+            conditions.append("$$IsDebitNote:$VoucherTypeName")
+        if has_pay:
+            conditions.append("$$IsPayment:$VoucherTypeName")
+        if has_rec:
+            conditions.append("$$IsReceipt:$VoucherTypeName")
+
+        if not conditions:
+            for vt in voucher_types:
+                conditions.append(f'($VoucherTypeName = "{escape_xml_value(vt)}")')
+
+        condition_str = " OR ".join(conditions)
         filters.append("VoucherFilter")
-        formulas.append(f'<SYSTEM TYPE="Formulae" NAME="VoucherFilter">{conditions}</SYSTEM>')
+        formulas.append(f'<SYSTEM TYPE="Formulae" NAME="VoucherFilter">{condition_str}</SYSTEM>')
 
     if min_alter_id is not None and min_alter_id > 0:
         filters.append("AlterIdFilter")
@@ -240,7 +274,7 @@ def build_collection_vouchers_xml(
         f'<TDLMESSAGE>'
         f'<COLLECTION NAME="CustomVouchers" ISMODIFY="No">'
         f'<TYPE>Voucher</TYPE>'
-        f'<FETCH>VoucherNumber, Date, VoucherTypeName, PartyLedgerName, Amount, AlterId, Guid, MasterId</FETCH>'
+        f'<FETCH>Date, Guid, MasterId, AlterId, VoucherTypeName, VoucherNumber, PartyLedgerName, Amount, IsCancelled, IsOptional, AllInventoryEntries.*, AllLedgerEntries.*</FETCH>'
         f'{filter_elem}'
         f'</COLLECTION>'
         f'{formula_elem}'
@@ -275,12 +309,16 @@ def build_outstandings_xml(company_name: str, group_type: str = "Sundry Debtors"
 
 
 def parse_tally_vouchers_xml(xml_content: str) -> List[dict]:
-    """Parses Tally Vouchers XML into normalized dictionaries."""
+    """Parses Tally Vouchers XML into normalized dictionaries with inventory and ledger lines."""
     vouchers = []
+    clean_xml = sanitize_tally_xml(xml_content)
     try:
-        root = ET.fromstring(xml_content)
+        root = ET.fromstring(clean_xml)
         for v in root.iter("VOUCHER"):
-            v_dict = {}
+            v_dict = {
+                "inventoryEntries": [],
+                "ledgerEntries": []
+            }
             for child in v:
                 tag = child.tag.upper()
                 text = (child.text or "").strip()
@@ -288,8 +326,10 @@ def parse_tally_vouchers_xml(xml_content: str) -> List[dict]:
                     v_dict["voucherDate"] = text
                 elif tag == "VOUCHERNUMBER":
                     v_dict["voucherNumber"] = text
+                    v_dict["sourceVoucherNumber"] = text
                 elif tag == "VOUCHERTYPENAME":
                     v_dict["voucherType"] = text
+                    v_dict["voucherTypeName"] = text
                 elif tag == "PARTYLEDGERNAME":
                     v_dict["partyLedgerName"] = text
                 elif tag == "AMOUNT":
@@ -304,11 +344,51 @@ def parse_tally_vouchers_xml(xml_content: str) -> List[dict]:
                         v_dict["alterId"] = 0
                 elif tag == "GUID":
                     v_dict["guid"] = text
+                    v_dict["sourceObjectId"] = text
                 elif tag == "MASTERID":
                     try:
                         v_dict["masterId"] = int(text)
                     except ValueError:
                         v_dict["masterId"] = 0
+                elif tag == "ISCANCELLED":
+                    v_dict["isCancelled"] = text.lower() in ("yes", "true", "1")
+                elif tag == "ISOPTIONAL":
+                    v_dict["isOptional"] = text.lower() in ("yes", "true", "1")
+                elif tag == "ALLINVENTORYENTRIES.LIST":
+                    item_name = (child.findtext("STOCKITEMNAME") or child.findtext("NAME") or "").strip()
+                    raw_qty = (child.findtext("ACTUALQTY") or child.findtext("BILLEDQTY") or "").strip()
+                    raw_rate = (child.findtext("RATE") or "").strip()
+                    raw_amt = (child.findtext("AMOUNT") or "").strip()
+                    qty_match = re.search(r"[-+]?\d*\.?\d+", raw_qty)
+                    qty_val = float(qty_match.group(0)) if qty_match else 0.0
+                    unit_match = re.search(r"[A-Za-z%][\w%.\-\s]*$", raw_qty)
+                    unit_val = unit_match.group(0).strip() if unit_match else None
+                    if not unit_val and "/" in raw_rate:
+                        unit_val = raw_rate.split("/")[-1].strip()
+                    try:
+                        line_amt = float(re.sub(r"[^\d.-]", "", raw_amt)) if raw_amt else 0.0
+                    except Exception:
+                        line_amt = 0.0
+                    v_dict["inventoryEntries"].append({
+                        "stockItemName": item_name,
+                        "quantity": qty_val,
+                        "unit": unit_val,
+                        "rate": raw_rate or None,
+                        "amount": abs(line_amt)
+                    })
+                elif tag == "ALLLEDGERENTRIES.LIST":
+                    lname = (child.findtext("LEDGERNAME") or "").strip()
+                    lamt_str = (child.findtext("AMOUNT") or "").strip()
+                    try:
+                        lamt = float(re.sub(r"[^\d.-]", "", lamt_str)) if lamt_str else 0.0
+                    except Exception:
+                        lamt = 0.0
+                    is_pos = (child.findtext("ISDEEMEDPOSITIVE") or "").strip().lower()
+                    v_dict["ledgerEntries"].append({
+                        "ledgerName": lname,
+                        "amount": abs(lamt),
+                        "isCredit": is_pos == "no" or lamt < 0
+                    })
 
             if v_dict.get("guid") or v_dict.get("voucherNumber"):
                 vouchers.append(v_dict)
@@ -324,8 +404,9 @@ def parse_tally_masters_xml(xml_content: str, item_tag: str = "LEDGER") -> List[
     """
     results = []
     item_tag_upper = item_tag.upper()
+    clean_xml = sanitize_tally_xml(xml_content)
     try:
-        root = ET.fromstring(xml_content)
+        root = ET.fromstring(clean_xml)
         for elem in root.iter():
             if elem.tag.upper() != item_tag_upper:
                 continue

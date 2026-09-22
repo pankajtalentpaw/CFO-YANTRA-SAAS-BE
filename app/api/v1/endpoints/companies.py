@@ -21,11 +21,14 @@ from app.models import (
 from app.services.analytics.catalog import get_catalog_summary, LENSES
 from app.services.analytics.cube import AnalyticsCube, verify_cube
 from app.services.analytics.dashboard_service import compute_dashboard_data
+from app.services.analytics.accounting_analysis import run_accounting_analysis
+from app.services.analytics.mis_report5_bridge import call_mis_report5_engine
 
 from datetime import datetime, timezone
 from pathlib import Path
 from app.services.storage import company_folder_service
 from app.services.tally.tally_client import tally_client
+from app.services.sync.scheduler import background_scheduler
 
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
@@ -41,7 +44,7 @@ async def get_comp_db(companyId: str) -> AsyncGenerator[AsyncSession, None]:
 
 
 def _enrich_company_storage_metadata(cid: str, company_obj: Optional[Any] = None) -> Dict[str, Any]:
-    """Computes storage telemetry, file sizes, and sync freshness."""
+    """Computes storage telemetry, file sizes, sync freshness, and auto-sync settings."""
     meta = company_folder_service.ensure_company_structure(cid)
     db_path = company_folder_service.get_company_db_path(cid)
     sync_state = company_folder_service.load_sync_state(cid)
@@ -56,14 +59,20 @@ def _enrich_company_storage_metadata(cid: str, company_obj: Optional[Any] = None
     if not status:
         status = "COMPLETED" if has_local else "PENDING"
 
+    c_sched = background_scheduler.get_company_config(cid)
+
     return {
         "tallyFolder": meta.get("folderName"),
         "tallyCompanyNumber": meta.get("companyNumber"),
         "isLocalAvailable": has_local,
         "localDatabaseSize": db_size,
         "lastSyncTime": last_sync,
-        "isStale": sync_state.get("isStale", False),
-        "syncStatus": status
+        "isStale": sync_state.get("isStale", not has_local),
+        "syncStatus": status,
+        "autoSync": {
+            "enabled": c_sched.get("enabled", True),
+            "intervalMinutes": c_sched.get("intervalMinutes", 15)
+        }
     }
 
 
@@ -334,55 +343,67 @@ async def get_company_analytics_catalog(companyId: str):
 
 
 @router.get("/{companyId}/reports/report5/analytics/dashboards")
-async def get_company_analytics_dashboards(companyId: str):
-    return {
-        "success": True,
-        "companyId": companyId,
-        "data": {
-            "ownerTop5": [],
-            "salesManagerTop10": []
-        }
-    }
+async def get_company_analytics_dashboards(
+    companyId: str,
+    fromDate: Optional[str] = Query(None),
+    toDate: Optional[str] = Query(None),
+    measure: Optional[str] = Query("withCharges")
+):
+    """Returns Owner Top-5 Strategic Decisions & Sales Manager Top-10 Tactical Actions."""
+    return call_mis_report5_engine(
+        company_id=companyId,
+        action="dashboards",
+        options={"fromDate": fromDate, "toDate": toDate, "measure": measure}
+    )
 
 
 @router.get("/{companyId}/reports/report5/analytics/verification")
-async def get_company_analytics_verification(companyId: str):
-    cube = AnalyticsCube()
-    results = verify_cube(cube)
-    return {
-        "success": True,
-        "companyId": companyId,
-        "data": {
-            "checks": results,
-            "allPassed": all(r["status"] == "PASS" for r in results)
-        }
-    }
+async def get_company_analytics_verification(
+    companyId: str,
+    fromDate: Optional[str] = Query(None),
+    toDate: Optional[str] = Query(None),
+    measure: Optional[str] = Query("withCharges")
+):
+    """Executes CV01-CV16 mathematical cross-verification suite on company cube."""
+    return call_mis_report5_engine(
+        company_id=companyId,
+        action="verification",
+        options={"fromDate": fromDate, "toDate": toDate, "measure": measure}
+    )
 
 
 @router.get("/{companyId}/reports/report5/analytics")
-async def get_company_analytics(companyId: str):
-    return {
-        "success": True,
-        "companyId": companyId,
-        "data": {
-            "analyses": [],
-            "catalog": get_catalog_summary()
-        }
-    }
+async def get_company_analytics(
+    companyId: str,
+    lensId: Optional[int] = Query(None),
+    analysisId: Optional[str] = Query(None),
+    fromDate: Optional[str] = Query(None),
+    toDate: Optional[str] = Query(None),
+    measure: Optional[str] = Query("withCharges")
+):
+    """Executes 160-Analysis Decision Intelligence suite for specific lens or across all lenses."""
+    return call_mis_report5_engine(
+        company_id=companyId,
+        action="analytics",
+        options={"lensId": lensId, "analysisId": analysisId, "fromDate": fromDate, "toDate": toDate, "measure": measure}
+    )
 
 
 @router.get("/{companyId}/reports/report5")
 @router.get("/{companyId}/mis-report-5")
-async def get_mis_report_5(companyId: str):
-    return {
-        "success": True,
-        "companyId": companyId,
-        "data": {
-            "reportId": "MIS05",
-            "title": "Decision Intelligence MIS Report 5",
-            "lenses": LENSES
-        }
-    }
+async def get_mis_report_5(
+    companyId: str,
+    fromDate: Optional[str] = Query(None),
+    toDate: Optional[str] = Query(None),
+    measure: Optional[str] = Query("withCharges"),
+    filterId: Optional[int] = Query(None)
+):
+    """Executes 18-Filter Owner-POV Analytics Suite (Product x City x Month Cube)."""
+    return call_mis_report5_engine(
+        company_id=companyId,
+        action="report5",
+        options={"fromDate": fromDate, "toDate": toDate, "measure": measure, "filterId": filterId}
+    )
 
 
 @router.get("/{companyId}/overview")
@@ -615,48 +636,184 @@ async def get_voucher(companyId: str, voucherId: str, db: AsyncSession = Depends
 @router.get("/{companyId}/sales-analysis")
 async def get_sales_analysis(
     companyId: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=1000),
     fromDate: Optional[str] = Query(None),
     toDate: Optional[str] = Query(None),
+    customer: Optional[str] = Query(None),
+    product: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    city: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_comp_db)
 ):
-    dash = await compute_dashboard_data(db, companyId, fromDate, toDate)
-    kpi_sales = dash.get("kpis", {}).get("sales", {})
+    comp_res = await db.execute(select(Company).where(Company.companyId == companyId))
+    company = comp_res.scalar_one_or_none()
+    company_dict = unwrap_row(company) if company else {"companyId": companyId, "name": companyId}
+
+    v_res = await db.execute(
+        select(Voucher).where(Voucher.companyId == companyId, Voucher.isDeleted == False)
+    )
+    vouchers = [unwrap_row(v) for v in v_res.scalars().all()]
+
+    l_res = await db.execute(
+        select(Ledger).where(Ledger.companyId == companyId, Ledger.isDeleted == False)
+    )
+    party_map = {}
+    for l in l_res.scalars().all():
+        p_name = (l.name or "").lower().strip()
+        p_data = l.data if isinstance(l.data, dict) else {}
+        if not p_data and isinstance(l.data, str):
+            try:
+                p_data = json.loads(l.data)
+            except Exception:
+                p_data = {}
+        party_map[p_name] = {
+            "name": l.name,
+            "state": p_data.get("state") or p_data.get("stateName") or None,
+            "city": p_data.get("city") or None,
+            "country": p_data.get("country") or p_data.get("countryName") or None
+        }
+
+    vt_res = await db.execute(
+        select(VoucherType).where(VoucherType.companyId == companyId, VoucherType.isDeleted == False)
+    )
+    vt_map = {vt.name.lower().strip(): (vt.parent or vt.name).lower().strip() for vt in vt_res.scalars().all() if vt.name}
+
+    options = {
+        "fromDate": fromDate,
+        "toDate": toDate,
+        "customer": customer,
+        "product": product,
+        "country": country,
+        "state": state,
+        "city": city,
+        "search": search,
+        "page": page,
+        "limit": limit
+    }
+    analysis = run_accounting_analysis(
+        vouchers=vouchers,
+        company=company_dict,
+        direction="SALES",
+        options=options,
+        party_map=party_map,
+        voucher_types_map=vt_map
+    )
+
+    all_rows = analysis.pop("rows", [])
+    total_rows = len(all_rows)
+    total_pages = (total_rows + limit - 1) // limit if limit > 0 else 1
+    start_idx = (page - 1) * limit
+    paged_rows = all_rows[start_idx:start_idx + limit]
+
+    row_pagination = {
+        "page": page,
+        "limit": limit,
+        "total": total_rows,
+        "totalPages": max(1, total_pages)
+    }
+
     return {
         "success": True,
         "companyId": companyId,
-        "data": {
-            "totalRevenue": kpi_sales.get("amount", "0.00"),
-            "invoicesCount": kpi_sales.get("count", 0),
-            "monthlyRevenue": [
-                {"month": m["label"], "amount": m["sales"], "invoices": m.get("salesCount", 0)}
-                for m in dash.get("monthly", [])
-            ],
-            "topCustomers": dash.get("topCustomers", {}),
-            "topItems": dash.get("topItems", {})
-        }
+        "available": True,
+        **analysis,
+        "rows": paged_rows,
+        "rowPagination": row_pagination
     }
 
 
 @router.get("/{companyId}/purchase-analysis")
 async def get_purchase_analysis(
     companyId: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=1000),
     fromDate: Optional[str] = Query(None),
     toDate: Optional[str] = Query(None),
+    supplier: Optional[str] = Query(None),
+    product: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    city: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_comp_db)
 ):
-    dash = await compute_dashboard_data(db, companyId, fromDate, toDate)
-    kpi_pur = dash.get("kpis", {}).get("purchases", {})
+    comp_res = await db.execute(select(Company).where(Company.companyId == companyId))
+    company = comp_res.scalar_one_or_none()
+    company_dict = unwrap_row(company) if company else {"companyId": companyId, "name": companyId}
+
+    v_res = await db.execute(
+        select(Voucher).where(Voucher.companyId == companyId, Voucher.isDeleted == False)
+    )
+    vouchers = [unwrap_row(v) for v in v_res.scalars().all()]
+
+    l_res = await db.execute(
+        select(Ledger).where(Ledger.companyId == companyId, Ledger.isDeleted == False)
+    )
+    party_map = {}
+    for l in l_res.scalars().all():
+        p_name = (l.name or "").lower().strip()
+        p_data = l.data if isinstance(l.data, dict) else {}
+        if not p_data and isinstance(l.data, str):
+            try:
+                p_data = json.loads(l.data)
+            except Exception:
+                p_data = {}
+        party_map[p_name] = {
+            "name": l.name,
+            "state": p_data.get("state") or p_data.get("stateName") or None,
+            "city": p_data.get("city") or None,
+            "country": p_data.get("country") or p_data.get("countryName") or None
+        }
+
+    vt_res = await db.execute(
+        select(VoucherType).where(VoucherType.companyId == companyId, VoucherType.isDeleted == False)
+    )
+    vt_map = {vt.name.lower().strip(): (vt.parent or vt.name).lower().strip() for vt in vt_res.scalars().all() if vt.name}
+
+    options = {
+        "fromDate": fromDate,
+        "toDate": toDate,
+        "supplier": supplier,
+        "product": product,
+        "country": country,
+        "state": state,
+        "city": city,
+        "search": search,
+        "page": page,
+        "limit": limit
+    }
+    analysis = run_accounting_analysis(
+        vouchers=vouchers,
+        company=company_dict,
+        direction="PURCHASE",
+        options=options,
+        party_map=party_map,
+        voucher_types_map=vt_map
+    )
+
+    all_rows = analysis.pop("rows", [])
+    total_rows = len(all_rows)
+    total_pages = (total_rows + limit - 1) // limit if limit > 0 else 1
+    start_idx = (page - 1) * limit
+    paged_rows = all_rows[start_idx:start_idx + limit]
+
+    row_pagination = {
+        "page": page,
+        "limit": limit,
+        "total": total_rows,
+        "totalPages": max(1, total_pages)
+    }
+
     return {
         "success": True,
         "companyId": companyId,
-        "data": {
-            "totalPurchases": kpi_pur.get("amount", "0.00"),
-            "billsCount": kpi_pur.get("count", 0),
-            "monthlyPurchases": [
-                {"month": m["label"], "amount": m["purchases"]}
-                for m in dash.get("monthly", [])
-            ]
-        }
+        "available": True,
+        **analysis,
+        "rows": paged_rows,
+        "rowPagination": row_pagination
     }
 
 

@@ -754,6 +754,42 @@ class TallySyncEngine:
                 is_xml=True
             )
 
+            # Parse bills BEFORE executing delete to guarantee atomicity and avoid data loss
+            import defusedxml.ElementTree as ET
+            root = ET.fromstring(raw_xml)
+            parsed_bills = []
+            for bill_elem in root.iter("BILL"):
+                party = bill_elem.findtext("BILLPARTY", "Unknown")
+                bill_no = bill_elem.findtext("BILLREF", "REF")
+                bill_date = bill_elem.findtext("BILLDATE", "")
+                due_date = bill_elem.findtext("BILLDUEDATE", "")
+                try:
+                    amt = float(bill_elem.findtext("BILLCL", "0.0"))
+                except ValueError:
+                    amt = 0.0
+
+                overdue_days = 0
+                is_overdue = False
+                if due_date:
+                    try:
+                        d_date = datetime.strptime(due_date.strip(), "%Y%m%d")
+                        diff = (datetime.now() - d_date).days
+                        if diff > 0:
+                            overdue_days = diff
+                            is_overdue = True
+                    except Exception:
+                        pass
+
+                parsed_bills.append({
+                    "party": party,
+                    "bill_no": bill_no,
+                    "bill_date": bill_date,
+                    "due_date": due_date,
+                    "amt": amt,
+                    "overdue_days": overdue_days,
+                    "is_overdue": is_overdue
+                })
+
             bills_synced = 0
             for db in dbs:
                 try:
@@ -763,44 +799,21 @@ class TallySyncEngine:
                             BillOutstanding.partyType == party_type
                         )
                     )
-
-                    import defusedxml.ElementTree as ET
-                    root = ET.fromstring(raw_xml)
-                    current_count = 0
-                    for bill_elem in root.iter("BILL"):
-                        party = bill_elem.findtext("BILLPARTY", "Unknown")
-                        bill_no = bill_elem.findtext("BILLREF", "REF")
-                        bill_date = bill_elem.findtext("BILLDATE", "")
-                        due_date = bill_elem.findtext("BILLDUEDATE", "")
-                        amt = float(bill_elem.findtext("BILLCL", "0.0"))
-
-                        overdue_days = 0
-                        is_overdue = False
-                        if due_date:
-                            try:
-                                d_date = datetime.strptime(due_date.strip(), "%Y%m%d")
-                                diff = (datetime.now() - d_date).days
-                                if diff > 0:
-                                    overdue_days = diff
-                                    is_overdue = True
-                            except Exception:
-                                pass
-
+                    for pb in parsed_bills:
                         db.add(BillOutstanding(
                             companyId=company_id,
-                            partyName=party,
+                            partyName=pb["party"],
                             partyType=party_type,
-                            billNumber=bill_no,
-                            billDate=bill_date,
-                            dueDate=due_date,
-                            billAmount=amt,
-                            pendingAmount=amt,
-                            overdueDays=overdue_days,
-                            isOverdue=is_overdue
+                            billNumber=pb["bill_no"],
+                            billDate=pb["bill_date"],
+                            dueDate=pb["due_date"],
+                            billAmount=pb["amt"],
+                            pendingAmount=pb["amt"],
+                            overdueDays=pb["overdue_days"],
+                            isOverdue=pb["is_overdue"]
                         ))
-                        current_count += 1
                     await db.commit()
-                    bills_synced = current_count
+                    bills_synced = len(parsed_bills)
                 except Exception:
                     await db.rollback()
                     if db is comp_db:
@@ -811,11 +824,18 @@ class TallySyncEngine:
         return 0
 
     async def _safe_tally_request(self, xml_payload: str) -> str:
-        """Executes request toward Tally with fallback on mock if Tally is offline."""
-        try:
-            return await tally_client.execute_request(xml_payload)
-        except Exception:
-            return "<ENVELOPE><HEADER><STATUS>OFFLINE</STATUS></HEADER><BODY><DATA></DATA></BODY></ENVELOPE>"
+        """
+        Executes request toward TallyPrime.
+        Strictly preserves data integrity: raises ApiError if Tally is offline or returns error.
+        NEVER fakes success or returns empty XML that could lead to data loss.
+        """
+        res = await tally_client.execute_request(xml_payload)
+        if not res or "<STATUS>OFFLINE</STATUS>" in res:
+            raise ApiError.bad_gateway(
+                "TallyPrime returned an empty or offline response. Synchronization halted to preserve local data.",
+                AppErrorCodes.TALLY_CONNECTION_FAILED
+            )
+        return res
 
 
 tally_sync_engine = TallySyncEngine()

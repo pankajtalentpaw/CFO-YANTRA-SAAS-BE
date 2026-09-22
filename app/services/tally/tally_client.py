@@ -51,10 +51,11 @@ class TallyClient:
                     AppErrorCodes.INVALID_PAYLOAD
                 )
 
-    async def execute_request(self, xml_payload: str) -> str:
+    async def execute_request(self, xml_payload: str, timeout: Optional[float] = None) -> str:
         """Executes a serialized, read-only request to TallyPrime loopback server."""
         self._validate_read_only(xml_payload)
         client = self._get_client()
+        req_timeout = timeout if timeout is not None else (float(settings.TALLY_TIMEOUT_MS) / 1000.0)
 
         # Enforce single-socket serialization to protect Tally's single-threaded server
         async with self._lock:
@@ -62,7 +63,8 @@ class TallyClient:
                 response = await client.post(
                     self.base_url,
                     content=xml_payload.encode("utf-8"),
-                    headers={"Content-Type": "text/xml; charset=utf-8"}
+                    headers={"Content-Type": "text/xml; charset=utf-8"},
+                    timeout=req_timeout
                 )
                 response.raise_for_status()
                 return response.text
@@ -74,7 +76,7 @@ class TallyClient:
             except httpx.TimeoutException:
                 raise ApiError(
                     504,
-                    "TallyPrime request timed out.",
+                    f"TallyPrime request timed out after {req_timeout}s.",
                     AppErrorCodes.TALLY_TIMEOUT
                 )
 
@@ -124,10 +126,10 @@ class TallyClient:
   </BODY>
 </ENVELOPE>"""
 
-    async def fetch_loaded_companies(self) -> List[Dict[str, Any]]:
+    async def fetch_loaded_companies(self, timeout: Optional[float] = None) -> List[Dict[str, Any]]:
         """Queries TallyPrime live and parses all currently loaded companies."""
         xml = self.build_company_collection_xml()
-        raw = await self.execute_request(xml)
+        raw = await self.execute_request(xml, timeout=timeout)
         root = ET.fromstring(raw)
         companies = []
         for comp in root.findall(".//COMPANY"):
@@ -253,25 +255,96 @@ class TallyClient:
         except Exception:
             return {"gstin": None, "pan": None}
 
-    async def probe_connection(self) -> Dict[str, Any]:
-        """Probes TallyPrime loopback connectivity and lists active loaded companies."""
-        start = time.perf_counter()
+    def is_tally_process_running(self) -> bool:
+        """Checks if tally.exe process is currently active on the host OS."""
+        import subprocess
         try:
-            loaded = await self.fetch_loaded_companies()
+            res = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq tally.exe", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            return "tally.exe" in res.stdout.lower()
+        except Exception:
+            return False
+
+    def is_port_listening(self) -> bool:
+        """Fast low-level socket probe to check if Tally HTTP port is accepting TCP connections."""
+        import socket
+        try:
+            with socket.create_connection((self.host, self.port), timeout=1.0):
+                return True
+        except OSError:
+            return False
+
+    async def probe_connection(self) -> Dict[str, Any]:
+        """
+        Probes TallyPrime loopback connectivity, process state, and active loaded companies.
+        Accurately distinguishes:
+        - CONNECTED (Online and company loaded)
+        - NO_COMPANY_LOADED (Tally port open, but 0 companies open)
+        - PORT_CLOSED (Process running, but port 9000 refused/unresponsive)
+        - OFFLINE (Tally process not running)
+        """
+        start = time.perf_counter()
+        port_open = self.is_port_listening()
+        proc_running = self.is_tally_process_running()
+
+        if not port_open:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            if proc_running:
+                return {
+                    "connected": False,
+                    "status": "PORT_CLOSED",
+                    "operatingMode": "PROCESS_RUNNING_PORT_BLOCKED",
+                    "isAvailable": False,
+                    "responseTimeMs": duration_ms,
+                    "message": f"TallyPrime process is active, but HTTP port {self.port} is not responding. Enable ODBC/HTTP in Tally F12 config.",
+                    "activeCompanies": []
+                }
+            return {
+                "connected": False,
+                "status": "OFFLINE",
+                "operatingMode": "STOPPED",
+                "isAvailable": False,
+                "responseTimeMs": duration_ms,
+                "message": f"TallyPrime is closed / not running on host machine.",
+                "activeCompanies": []
+            }
+
+        try:
+            probe_timeout = float(settings.TALLY_PROBE_TIMEOUT_MS) / 1000.0
+            loaded = await self.fetch_loaded_companies(timeout=probe_timeout)
             duration_ms = int((time.perf_counter() - start) * 1000)
             names = [c["name"] for c in loaded]
-            return {
-                "connected": True,
-                "status": "ONLINE",
-                "responseTimeMs": duration_ms,
-                "message": "Connected to TallyPrime successfully",
-                "activeCompanies": names
-            }
+            if names:
+                return {
+                    "connected": True,
+                    "status": "ONLINE",
+                    "operatingMode": "CONNECTED",
+                    "isAvailable": True,
+                    "responseTimeMs": duration_ms,
+                    "message": "Connected to TallyPrime successfully",
+                    "activeCompanies": names
+                }
+            else:
+                return {
+                    "connected": True,
+                    "status": "NO_COMPANY_LOADED",
+                    "operatingMode": "CONNECTED_NO_COMPANY",
+                    "isAvailable": False,
+                    "responseTimeMs": duration_ms,
+                    "message": "TallyPrime HTTP server is online, but no company is currently open.",
+                    "activeCompanies": []
+                }
         except ApiError as e:
             duration_ms = int((time.perf_counter() - start) * 1000)
             return {
                 "connected": False,
                 "status": "OFFLINE",
+                "operatingMode": "ERROR",
+                "isAvailable": False,
                 "responseTimeMs": duration_ms,
                 "message": e.message,
                 "activeCompanies": []
@@ -281,6 +354,8 @@ class TallyClient:
             return {
                 "connected": False,
                 "status": "OFFLINE",
+                "operatingMode": "ERROR",
+                "isAvailable": False,
                 "responseTimeMs": duration_ms,
                 "message": str(e),
                 "activeCompanies": []

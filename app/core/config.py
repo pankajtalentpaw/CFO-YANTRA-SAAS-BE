@@ -4,6 +4,7 @@ Loads from environment variables or .env file with defaults.
 """
 
 from pathlib import Path
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -52,8 +53,16 @@ class Settings(BaseSettings):
     TALLY_PROBE_TIMEOUT_MS: int = 8000
 
     # Background Concurrency & Synchronization
-    ENABLE_BACKGROUND_JOBS: bool = False
+    ENABLE_BACKGROUND_JOBS: bool = True
     WORKERS: int = 1
+
+    # Automatic Tally Background Scheduler Settings
+    TALLY_AUTO_SYNC_ENABLED: bool = True
+    TALLY_AUTO_SYNC_INTERVAL_MINUTES: int = 15
+    TALLY_AUTO_SYNC_MAX_RETRIES: int = 3
+    TALLY_AUTO_SYNC_BACKOFF_SECONDS: int = 30
+    TALLY_EXECUTABLE_PATH: Optional[str] = r"C:\Program Files\TallyPrimeEditLog (1)\tally.exe"
+    TALLY_ALLOW_HEADLESS_SPAWN: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

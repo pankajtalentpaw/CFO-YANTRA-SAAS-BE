@@ -12,6 +12,8 @@ from app.core.database import get_db
 from app.models import Company, SyncState, Voucher, Ledger, unwrap_row
 from app.services.storage import company_folder_service
 from app.services.sync import tally_sync_engine
+from app.services.sync.scheduler import background_scheduler
+from app.services.tally.tally_client import tally_client
 
 router = APIRouter(prefix="/sync", tags=["Sync"])
 
@@ -83,6 +85,8 @@ async def get_sync_status(
 
     is_running = live_status.get("isRunning", False)
     active_sync = live_status.get("activeSync", {})
+    sched_status = background_scheduler.get_status()
+    tally_probe = await tally_client.probe_connection()
 
     payload = {
         "success": True,
@@ -94,10 +98,23 @@ async def get_sync_status(
             "uri": "sqlite:///cfo_yantra.sqlite",
             "lastError": None
         },
+        "source": {
+            "connected": tally_probe.get("connected", False),
+            "status": tally_probe.get("status", "OFFLINE"),
+            "operatingMode": tally_probe.get("operatingMode", "STOPPED"),
+            "isAvailable": tally_probe.get("isAvailable", False),
+            "message": tally_probe.get("message", ""),
+            "activeCompanies": tally_probe.get("activeCompanies", [])
+        },
         "autoSync": {
-            "enabled": True,
+            "enabled": sched_status["enabled"],
+            "isPaused": sched_status["isPaused"],
             "running": is_running,
-            "intervalMs": 30000
+            "intervalMinutes": sched_status["intervalMinutes"],
+            "intervalSeconds": sched_status["intervalSeconds"],
+            "lastRunAt": sched_status["lastRunAt"],
+            "nextRunAt": sched_status["nextRunAt"],
+            "runningCompanies": sched_status["runningCompanies"]
         },
         "companyCount": len(companies),
         "companies": companies,
@@ -107,14 +124,18 @@ async def get_sync_status(
             "states": unwrapped_states,
             "companies": companies,
             "activeSync": active_sync,
+            "scheduler": sched_status,
+            "source": tally_probe,
             "mirror": {
                 "enabled": True,
                 "connected": True,
                 "uri": "sqlite:///cfo_yantra.sqlite"
             },
             "autoSync": {
-                "enabled": True,
-                "running": is_running
+                "enabled": sched_status["enabled"],
+                "isPaused": sched_status["isPaused"],
+                "running": is_running,
+                "intervalMinutes": sched_status["intervalMinutes"]
             }
         }
     }
@@ -165,6 +186,64 @@ async def get_mirrored_companies(db: AsyncSession = Depends(get_db)):
     return {
         "success": True,
         "data": [unwrap_row(c) for c in companies]
+    }
+
+# --------------------------------------------------------------------------
+# BACKGROUND SCHEDULER MANAGEMENT ENDPOINTS (Static routes before /{companyId})
+# --------------------------------------------------------------------------
+
+@router.get("/scheduler")
+async def get_scheduler_status():
+    """Returns background synchronization scheduler telemetry and status."""
+    return {
+        "success": True,
+        "data": background_scheduler.get_status()
+    }
+
+@router.post("/scheduler/enable")
+async def enable_scheduler():
+    background_scheduler.set_enabled(True)
+    return {
+        "success": True,
+        "message": "Background automatic synchronization enabled",
+        "data": background_scheduler.get_status()
+    }
+
+@router.post("/scheduler/disable")
+async def disable_scheduler():
+    background_scheduler.set_enabled(False)
+    return {
+        "success": True,
+        "message": "Background automatic synchronization disabled",
+        "data": background_scheduler.get_status()
+    }
+
+@router.post("/scheduler/pause")
+async def pause_scheduler():
+    background_scheduler.pause()
+    return {
+        "success": True,
+        "message": "Background automatic synchronization paused",
+        "data": background_scheduler.get_status()
+    }
+
+@router.post("/scheduler/resume")
+async def resume_scheduler():
+    background_scheduler.resume()
+    return {
+        "success": True,
+        "message": "Background automatic synchronization resumed",
+        "data": background_scheduler.get_status()
+    }
+
+@router.post("/scheduler/interval")
+async def set_scheduler_interval(payload: Dict[str, Any] = Body(...)):
+    minutes = payload.get("intervalMinutes") or payload.get("minutes") or 15
+    background_scheduler.set_global_interval(int(minutes))
+    return {
+        "success": True,
+        "message": f"Global auto-sync interval set to {minutes} minutes",
+        "data": background_scheduler.get_status()
     }
 
 @router.get("/{companyId}/counts")
@@ -236,6 +315,25 @@ async def retry_sync_for_company(companyId: str, payload: Optional[Dict[str, Any
         "success": True,
         "message": f"Sync retry launched for company '{comp_name}'",
         "companyId": companyId
+    }
+
+@router.post("/{companyId}/schedule")
+async def configure_company_schedule(
+    companyId: str,
+    payload: Dict[str, Any] = Body(...)
+):
+    """Configures company-specific automatic synchronization parameters."""
+    enabled = payload.get("enabled")
+    interval_minutes = payload.get("intervalMinutes")
+    background_scheduler.set_company_config(
+        company_id=companyId,
+        enabled=enabled,
+        interval_minutes=interval_minutes
+    )
+    return {
+        "success": True,
+        "message": f"Schedule configuration updated for company '{companyId}'",
+        "data": background_scheduler.get_company_config(companyId)
     }
 
 @router.get("/tally-event", operation_id="get_tally_webhook_event")
